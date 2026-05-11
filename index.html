@@ -160,9 +160,7 @@
   .seg-status{display:grid;grid-template-columns:repeat(5,1fr);gap:5px;margin:4px 0 6px}
   .seg-status button{height:36px;border-radius:10px;background:rgba(255,255,255,.06);font-size:11px;font-weight:500;color:rgba(255,255,255,.7);transition:all .12s;padding:0 2px;line-height:1}
   .seg-status button.round1.on{background:rgba(56,189,248,.22);color:#7dd3fc}
-  .seg-status button.finalist.on{background:rgba(168,85,247,.22);color:#d8b4fe}
   .seg-status button.needs_fixing.on{background:rgba(245,158,11,.22);color:#fcd34d}
-  .seg-status button.ready_upscale.on{background:rgba(34,197,94,.22);color:#86efac}
   .seg-status button.rejected.on{background:rgba(239,68,68,.22);color:#fca5a5}
   .seg-status button.archived.on{background:rgba(150,150,150,.25);color:rgba(255,255,255,.85)}
 
@@ -284,8 +282,8 @@
     <div class="sheet-section">
       <h3>Cleanup &amp; export</h3>
       <button class="ghost" id="archiveRejected" style="margin-top:0">Archive all rejected designs</button>
-      <button class="ghost" id="exportKeeps">Export Keeps + Ready (originals)</button>
-      <button class="ghost" id="exportAllKeeps">Re-export all (including already exported)</button>
+      <button class="ghost" id="exportKeeps">Export Keeps (originals)</button>
+      <button class="ghost" id="exportAllKeeps">Re-export all Keeps</button>
       <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:6px;line-height:1.4">Export shares the original HQ graphic files via iOS share sheet. Save to Photos or Files. Already-exported designs show a green dot and skip on the standard export.</div>
     </div>
     <div class="sheet-section">
@@ -393,11 +391,9 @@
         <div class="slider-labels"><span>\u2191 Up</span><span>Down \u2193</span></div>
       </div>
     </div>
-    <div class="seg-status" id="segStatus" style="grid-template-columns:repeat(6,1fr)">
+    <div class="seg-status" id="segStatus" style="grid-template-columns:repeat(4,1fr)">
       <button class="round1" data-s="round1">Keep</button>
-      <button class="finalist" data-s="finalist">Finalist</button>
       <button class="needs_fixing" data-s="needs_fixing">Fix</button>
-      <button class="ready_upscale" data-s="ready_upscale">Ready</button>
       <button class="rejected" data-s="rejected">Reject</button>
       <button class="archived" data-s="archived">Archive</button>
     </div>
@@ -516,8 +512,8 @@ async function dbClear(){
 }
 
 const SETTINGS_KEY = 'teesort_v2_settings', VIEW_KEY = 'teesort_v2_view';
-const STATUSES = ['round1','finalist','needs_fixing','ready_upscale','rejected','archived'];
-const STATUS_LABELS = {inbox:'New', round1:'Keep', finalist:'Finalist', needs_fixing:'Fix', ready_upscale:'Ready', rejected:'Rejected', archived:'Archived'};
+const STATUSES = ['round1','needs_fixing','rejected','archived'];
+const STATUS_LABELS = {inbox:'New', round1:'Keep', needs_fixing:'Fix', rejected:'Rejected', archived:'Archived'};
 
 // Print zones - calibrated to 959x1198 mockup
 // 15x18 sized to feel like an oversized chest print (the user's default)
@@ -781,8 +777,7 @@ function renderFilters(){
   STATUSES.forEach(s => { if(!counts[s]) counts[s] = 0; });
   const items = [
     {k:'all', label:'All'},{k:'inbox', label:'New'},{k:'round1', label:'Keep'},
-    {k:'finalist', label:'Finalist'},{k:'needs_fixing', label:'Fix'},
-    {k:'ready_upscale', label:'Ready'},{k:'rejected', label:'Rejected'},
+    {k:'needs_fixing', label:'Fix'},{k:'rejected', label:'Rejected'},
     {k:'archived', label:'Archived'}
   ];
   $('filters').innerHTML = items.map(it => {
@@ -1468,11 +1463,11 @@ async function exportDesigns(designs, forceAll){
 }
 
 $('exportKeeps').onclick = async () => {
-  const targets = state.designs.filter(d => ['round1','finalist','ready_upscale'].includes(d.status));
+  const targets = state.designs.filter(d => d.status === 'round1');
   await exportDesigns(targets, false);
 };
 $('exportAllKeeps').onclick = async () => {
-  const targets = state.designs.filter(d => ['round1','finalist','ready_upscale'].includes(d.status));
+  const targets = state.designs.filter(d => d.status === 'round1');
   await exportDesigns(targets, true);
 };
 
@@ -1864,6 +1859,8 @@ window.addEventListener('pageshow', e => {
       if(!('vOffsetOverride' in d)) d.vOffsetOverride = 0;
       if(!('exportedAt' in d)) d.exportedAt = null;
       if(!('side' in d)) d.side = 'front';
+      // Migrate old statuses to simplified system
+      if(d.status === 'finalist' || d.status === 'ready_upscale') d.status = 'round1';
     });
   } catch(e){
     console.error('db load failed', e);
