@@ -174,17 +174,18 @@
   /* Fullscreen swipe viewer */
   .viewer{position:fixed;inset:0;background:#000;z-index:48;display:none;flex-direction:column;touch-action:pan-y}
   .viewer.open{display:flex;animation:fade .2s}
-  .viewer-head{position:absolute;top:0;left:0;right:0;padding:env(safe-area-inset-top) 12px 8px;display:flex;align-items:center;justify-content:space-between;gap:8px;z-index:3;background:linear-gradient(to bottom,rgba(0,0,0,.55),transparent);pointer-events:none}
-  .viewer-head .icon-btn{pointer-events:auto;background:rgba(0,0,0,.5);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
+  .viewer-head{position:absolute;top:0;left:0;right:0;padding:env(safe-area-inset-top) 12px 8px;display:flex;align-items:center;justify-content:space-between;gap:8px;z-index:5;background:linear-gradient(to bottom,rgba(0,0,0,.55),transparent);pointer-events:none}
+  .viewer-head .icon-btn{pointer-events:auto;background:rgba(0,0,0,.5);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);touch-action:manipulation}
   .viewer-head .center{flex:1;text-align:center;color:rgba(255,255,255,.85);font-size:12px;font-weight:500;pointer-events:none}
   .viewer-track{flex:1;display:flex;align-items:center;justify-content:center;width:100%;overflow:hidden;position:relative}
   .viewer-slide{width:100%;height:100%;display:flex;align-items:center;justify-content:center;position:relative;will-change:transform,opacity}
   .viewer-slide img{max-width:100%;max-height:100%;object-fit:contain;display:block;-webkit-user-drag:none;user-select:none;-webkit-user-select:none;transform-origin:center}
   .viewer-slide .skel{position:absolute;inset:30% 25%;border-radius:14px;background:linear-gradient(90deg,rgba(255,255,255,.04),rgba(255,255,255,.08),rgba(255,255,255,.04));background-size:200% 100%;animation:shimmer 1.4s infinite;pointer-events:none}
-  .viewer-foot{position:absolute;bottom:0;left:0;right:0;padding:12px 12px max(14px,env(safe-area-inset-bottom));z-index:3;background:linear-gradient(to top,rgba(0,0,0,.65),transparent);pointer-events:none}
+  .viewer-foot{position:absolute;bottom:0;left:0;right:0;padding:12px 12px max(14px,env(safe-area-inset-bottom));z-index:5;background:linear-gradient(to top,rgba(0,0,0,.65),transparent);pointer-events:none}
   .viewer-foot > *{pointer-events:auto}
+  .viewer-foot button{pointer-events:auto;touch-action:manipulation}
   .viewer-actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;max-width:340px;margin:0 auto}
-  .viewer-action{height:46px;border-radius:12px;background:rgba(255,255,255,.12);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);color:#fff;font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:6px;transition:transform .08s}
+  .viewer-action{height:46px;border-radius:12px;background:rgba(255,255,255,.12);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);color:#fff;font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:6px;transition:transform .08s;pointer-events:auto;touch-action:manipulation;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:rgba(255,255,255,.1)}
   .viewer-action:active{transform:scale(.96)}
   .viewer-action svg{width:16px;height:16px}
   .viewer-action.keep.on{background:rgba(56,189,248,.95);color:#000}
@@ -418,7 +419,7 @@
   <div class="viewer-pos top" id="viewerPos">1 / 1</div>
   <div class="viewer-track" id="viewerTrack"></div>
   <div class="viewer-foot">
-    <div class="viewer-hint">Tap = Preview / Original  •  Swipe = next  •  Long-press = override</div>
+    <div class="viewer-hint">Tap = Preview / Original  •  Swipe = next  •  Long-press = options</div>
     <div class="viewer-actions">
       <button class="viewer-action keep" id="vaKeep">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
@@ -906,6 +907,21 @@ function attachCardHandlers(id){
   });
   const badge = el.querySelector('.badge.shirt');
   badge.addEventListener('click', e => { e.stopPropagation(); e.preventDefault(); cycleShirt(id); });
+  // BACK badge tappable to toggle back to front
+  const backBadge = el.querySelector('.back-badge');
+  if(backBadge){
+    backBadge.addEventListener('click', async e => {
+      e.stopPropagation();
+      e.preventDefault();
+      const dd = state.designs.find(x => x.id === id);
+      if(!dd) return;
+      dd.side = 'front';
+      invalidateCache(id);
+      await persistDesign(dd);
+      updateCardShirtBadgeInPlace(dd);
+      renderCardComposite(id);
+    });
+  }
   const keepBtn = el.querySelector('.action.keep');
   const fixBtn = el.querySelector('.action.fix');
   const rejBtn = el.querySelector('.action.reject');
@@ -1018,6 +1034,17 @@ function updateCardShirtBadgeInPlace(d){
       const b = document.createElement('span');
       b.className = 'badge back-badge';
       b.textContent = 'BACK';
+      b.addEventListener('click', async ev => {
+        ev.stopPropagation();
+        ev.preventDefault();
+        const dd = state.designs.find(x => x.id === d.id);
+        if(!dd) return;
+        dd.side = 'front';
+        invalidateCache(d.id);
+        await persistDesign(dd);
+        updateCardShirtBadgeInPlace(dd);
+        renderCardComposite(d.id);
+      });
       tl.appendChild(b);
     } else if(!isBack && existing){
       existing.remove();
@@ -1078,8 +1105,27 @@ $('toastUndo').onclick = async () => {
     d.status = state.lastAction.prev;
     await persistDesign(d);
     renderFilters();
-    // Need to re-render grid since the card may have been removed
-    renderGrid();
+    const existingCard = document.querySelector(`.card[data-id="${d.id}"]`);
+    const showsInCurrentFilter = state.filter === 'all'
+      || state.filter === d.status
+      || (state.filter === 'inbox' && (d.status === 'inbox' || !STATUSES.includes(d.status)));
+    if(existingCard){
+      existingCard.style.transition = 'opacity .2s, transform .2s';
+      existingCard.style.opacity = '1';
+      existingCard.style.transform = 'scale(1)';
+      updateCardStatusInPlace(d);
+      if(!showsInCurrentFilter){
+        // Reverted but doesn't match current filter — animate out after a moment
+        setTimeout(() => {
+          existingCard.style.opacity = '0';
+          existingCard.style.transform = 'scale(.94)';
+          setTimeout(() => existingCard.remove(), 220);
+        }, 600);
+      }
+    } else if(showsInCurrentFilter){
+      renderGrid();
+    }
+    if(typeof refreshViewerIfShowing === 'function') refreshViewerIfShowing(d.id);
   }
   $('toast').classList.remove('show');
   state.lastAction = null;
@@ -1115,7 +1161,9 @@ document.querySelectorAll('#cardSizeSeg button').forEach(b => {
     await persistDesign(d);
     document.querySelectorAll('#cardSizeSeg button').forEach(x => x.classList.toggle('on', x.dataset.v === d.sizeOverride));
     updateCardShirtBadgeInPlace(d);
+    refreshCardActionsSub();
     renderCardComposite(d.id);
+    refreshViewerIfShowing(d.id);
   };
 });
 document.querySelectorAll('#cardShirtSeg button').forEach(b => {
@@ -1127,7 +1175,9 @@ document.querySelectorAll('#cardShirtSeg button').forEach(b => {
     await persistDesign(d);
     document.querySelectorAll('#cardShirtSeg button').forEach(x => x.classList.toggle('on', x.dataset.v === d.shirtOverride));
     updateCardShirtBadgeInPlace(d);
+    refreshCardActionsSub();
     renderCardComposite(d.id);
+    refreshViewerIfShowing(d.id);
   };
 });
 $('resetSize').onclick = async () => {
@@ -1157,6 +1207,16 @@ function refreshCardActionsSub(){
   $('cardActionsSub').textContent = `${sideLabel} \u00b7 ${ZONES_FRONT[resolvedSize(d, state.settings)]?.label || ''} \u00b7 ${d.shirtOverride || (state.settings.shirtMode==='auto' ? d.resolvedShirt : state.settings.shirtMode)}`;
 }
 
+// If viewer is open and showing this design, refresh it too
+function refreshViewerIfShowing(id){
+  if(typeof viewerState === 'undefined') return;
+  if(!viewerState.ids || viewerState.ids.length === 0) return;
+  const currentId = viewerState.ids[viewerState.index];
+  if(currentId === id && typeof loadCurrent === 'function'){
+    loadCurrent();
+  }
+}
+
 document.querySelectorAll('#cardSideSeg button').forEach(b => {
   b.addEventListener('click', async e => {
     e.stopPropagation();
@@ -1169,6 +1229,7 @@ document.querySelectorAll('#cardSideSeg button').forEach(b => {
     updateCardShirtBadgeInPlace(d);
     refreshCardActionsSub();
     renderCardComposite(d.id);
+    refreshViewerIfShowing(d.id);
   });
 });
 
