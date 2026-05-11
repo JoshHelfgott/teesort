@@ -177,10 +177,10 @@
   .viewer-head{position:absolute;top:0;left:0;right:0;padding:env(safe-area-inset-top) 12px 8px;display:flex;align-items:center;justify-content:space-between;gap:8px;z-index:3;background:linear-gradient(to bottom,rgba(0,0,0,.55),transparent);pointer-events:none}
   .viewer-head .icon-btn{pointer-events:auto;background:rgba(0,0,0,.5);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
   .viewer-head .center{flex:1;text-align:center;color:rgba(255,255,255,.85);font-size:12px;font-weight:500;pointer-events:none}
-  .viewer-track{flex:1;display:flex;align-items:center;width:100%;overflow:hidden;position:relative;will-change:transform}
-  .viewer-slide{flex:0 0 100%;width:100%;height:100%;display:flex;align-items:center;justify-content:center;position:relative}
-  .viewer-slide img{max-width:100%;max-height:100%;object-fit:contain;display:block;-webkit-user-drag:none;user-select:none;-webkit-user-select:none}
-  .viewer-slide .skel{position:absolute;inset:30% 25%;background:rgba(255,255,255,.04);border-radius:14px;animation:shimmer 1.4s infinite;background:linear-gradient(90deg,rgba(255,255,255,.04),rgba(255,255,255,.08),rgba(255,255,255,.04));background-size:200% 100%}
+  .viewer-track{flex:1;display:flex;align-items:center;justify-content:center;width:100%;overflow:hidden;position:relative}
+  .viewer-slide{width:100%;height:100%;display:flex;align-items:center;justify-content:center;position:relative;will-change:transform,opacity}
+  .viewer-slide img{max-width:100%;max-height:100%;object-fit:contain;display:block;-webkit-user-drag:none;user-select:none;-webkit-user-select:none;transform-origin:center}
+  .viewer-slide .skel{position:absolute;inset:30% 25%;border-radius:14px;background:linear-gradient(90deg,rgba(255,255,255,.04),rgba(255,255,255,.08),rgba(255,255,255,.04));background-size:200% 100%;animation:shimmer 1.4s infinite;pointer-events:none}
   .viewer-foot{position:absolute;bottom:0;left:0;right:0;padding:12px 12px max(14px,env(safe-area-inset-bottom));z-index:3;background:linear-gradient(to top,rgba(0,0,0,.65),transparent);pointer-events:none}
   .viewer-foot > *{pointer-events:auto}
   .viewer-actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;max-width:340px;margin:0 auto}
@@ -522,13 +522,13 @@ const ZONES_FRONT = {
   '15x18':      {maxW:0.355, maxH:0.430, topY:0.310, label:'15\u00d718'},
   '12x16':      {maxW:0.280, maxH:0.360, topY:0.310, label:'12\u00d716'},
   'horizontal': {maxW:0.300, maxH:0.100, topY:0.395, label:'Horizontal'},
-  'full':       {maxW:0.360, maxH:0.470, topY:0.300, label:'Full front'}
+  'full':       {maxW:0.340, maxH:0.470, topY:0.300, label:'Full front'}
 };
 const ZONES_BACK = {
-  '15x18':      {maxW:0.355, maxH:0.430, topY:0.345, label:'15\u00d718'},
-  '12x16':      {maxW:0.280, maxH:0.360, topY:0.345, label:'12\u00d716'},
-  'horizontal': {maxW:0.300, maxH:0.100, topY:0.430, label:'Horizontal'},
-  'full':       {maxW:0.360, maxH:0.470, topY:0.330, label:'Full back'}
+  '15x18':      {maxW:0.340, maxH:0.430, topY:0.275, label:'15\u00d718'},
+  '12x16':      {maxW:0.270, maxH:0.360, topY:0.275, label:'12\u00d716'},
+  'horizontal': {maxW:0.290, maxH:0.100, topY:0.310, label:'Horizontal'},
+  'full':       {maxW:0.340, maxH:0.470, topY:0.265, label:'Full back'}
 };
 const ZONES = ZONES_FRONT; // for backward compat references
 function getZones(side){ return side === 'back' ? ZONES_BACK : ZONES_FRONT; }
@@ -833,11 +833,19 @@ function renderGrid(){
   }
   main.innerHTML = `<div class="grid cols-${state.gridCols}">${filtered.map(cardHtml).join('')}</div>`;
   ensureCardObserver();
-  // Observe each card for lazy rendering - prevents 200 simultaneous composites
-  filtered.forEach(d => {
+  // Visible-row count: enough to fill screen at current density
+  const visibleCount = state.gridCols * 6;  // ~6 rows worth
+  filtered.forEach((d, i) => {
     const el = document.querySelector(`.card[data-id="${d.id}"]`);
-    if(el) _cardObserver.observe(el);
+    if(!el) return;
     attachCardHandlers(d.id);
+    if(i < visibleCount){
+      // Render top of grid immediately (don't wait for observer)
+      el.dataset.rendered = '1';
+      renderCardComposite(d.id);
+    } else {
+      _cardObserver.observe(el);
+    }
   });
 }
 
@@ -925,20 +933,36 @@ async function renderCardComposite(id){
   const wrap = card.querySelector('.card-preview');
   try {
     const outputW = state.gridCols === 1 ? 900 : state.gridCols === 2 ? 600 : 460;
+    // Check if cached - if so render synchronously (no flash)
+    const cKey = cacheKey(d, state.settings, outputW);
+    const cached = compositeCache.get(cKey);
+    if(cached){
+      const img = new Image();
+      img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover';
+      img.onload = () => {
+        const skel = wrap.querySelector('.card-skeleton');
+        wrap.insertBefore(img, wrap.firstChild);
+        // Immediately remove old after insert (no fade for cached - feels instant)
+        const oldImgs = wrap.querySelectorAll('img');
+        oldImgs.forEach(x => { if(x !== img) x.remove(); });
+        if(skel) skel.remove();
+      };
+      img.src = cached;
+      return;
+    }
+    // Not cached - need to composite. Fade in to soften.
     const url = await composite(d, state.settings, outputW);
     const img = new Image();
-    img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .2s';
+    img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover;opacity:0;transition:opacity .18s';
     img.onload = () => {
       const skel = wrap.querySelector('.card-skeleton');
-      // Insert new image first, fade it in, THEN remove old after fade
       wrap.insertBefore(img, wrap.firstChild);
       requestAnimationFrame(() => { img.style.opacity = '1'; });
       setTimeout(() => {
         const oldImgs = wrap.querySelectorAll('img');
-        // Keep the new one (first child after insert)
         oldImgs.forEach(x => { if(x !== img) x.remove(); });
         if(skel) skel.remove();
-      }, 220);
+      }, 200);
     };
     img.src = url;
   } catch(e){ console.error('composite err', e); }
@@ -972,9 +996,23 @@ function updateCardShirtBadgeInPlace(d){
   if(!badge) return;
   const resolved = d.shirtOverride || (state.settings.shirtMode === 'auto' ? d.resolvedShirt : state.settings.shirtMode);
   const dotColor = resolved === 'black' ? '#000' : '#fff';
-  const editPip = isEdited(d) ? '<span class="edit-pip"></span>' : '';
+  const isBack = d.side === 'back';
+  const editPip = (isEdited(d) || isBack) ? '<span class="edit-pip"></span>' : '';
   badge.innerHTML = `<span class="dot" style="background:${dotColor}"></span><span class="shirt-text">${shirtBadgeText(d)}</span>${editPip}${d.exportedAt ? '<span class="export-pip"></span>' : ''}`;
-  el.classList.toggle('edited', isEdited(d));
+  el.classList.toggle('edited', isEdited(d) || isBack);
+  // Update BACK badge presence
+  const tl = el.querySelector('.card-tl');
+  if(tl){
+    const existing = tl.querySelector('.back-badge');
+    if(isBack && !existing){
+      const b = document.createElement('span');
+      b.className = 'badge back-badge';
+      b.textContent = 'BACK';
+      tl.appendChild(b);
+    } else if(!isBack && existing){
+      existing.remove();
+    }
+  }
 }
 
 // ===== Actions =====
@@ -1532,18 +1570,13 @@ $('fileInput').addEventListener('change', async e => {
 });
 
 
-// ===== Fullscreen viewer (rewritten) =====
+// ===== Fullscreen viewer (v3 - simple single-slide) =====
 let viewerState = {
   ids: [],
   index: 0,
   view: 'preview',
-  dragging: false,
-  startX: 0,
-  startY: 0,
-  axis: null,
   zoom: 1,
-  pinching: false,
-  startDist: 0
+  loadToken: 0  // increments on every load so stale loads don't override
 };
 
 function getFilteredIds(){ return getFiltered().map(d => d.id); }
@@ -1553,60 +1586,36 @@ function openViewer(startId){
   viewerState.index = Math.max(0, viewerState.ids.indexOf(startId));
   viewerState.view = 'preview';
   viewerState.zoom = 1;
+  // Build single slide container ONCE; we just swap its content
+  const track = $('viewerTrack');
+  track.innerHTML = '<div class="viewer-slide current" id="vSlide"><img id="vImg" alt=""><div class="skel" id="vSkel"></div></div>';
   $('viewer').classList.add('open');
-  buildViewerSlides();
-  renderViewerSlide();
+  loadCurrent();
   updateViewerUI();
 }
 
 function closeViewer(){
   $('viewer').classList.remove('open');
-  $('viewerTrack').innerHTML = '';
   viewerState.ids = [];
   viewerState.zoom = 1;
+  $('viewerTrack').innerHTML = '';
 }
 
-function buildViewerSlides(){
-  // Just 3 reusable slots: prev, current, next. We swap content as user navigates.
-  const track = $('viewerTrack');
-  track.innerHTML = '<div class="viewer-slide" data-slot="prev"></div><div class="viewer-slide current" data-slot="cur"></div><div class="viewer-slide" data-slot="next"></div>';
-  positionSlots();
-}
-
-function positionSlots(animate){
-  const slides = $('viewerTrack').querySelectorAll('.viewer-slide');
-  slides.forEach(s => {
-    s.style.transition = animate ? 'transform .25s cubic-bezier(.32,.72,0,1)' : 'none';
-  });
-  const prev = $('viewerTrack').querySelector('[data-slot="prev"]');
-  const cur = $('viewerTrack').querySelector('[data-slot="cur"]');
-  const next = $('viewerTrack').querySelector('[data-slot="next"]');
-  if(prev) prev.style.transform = 'translateX(-100%)';
-  if(cur)  cur.style.transform  = 'translateX(0%)';
-  if(next) next.style.transform = 'translateX(100%)';
-}
-
-async function renderToSlot(slot, idx){
-  if(idx < 0 || idx >= viewerState.ids.length){
-    slot.innerHTML = '';
-    return;
-  }
-  const id = viewerState.ids[idx];
+async function loadCurrent(){
+  const token = ++viewerState.loadToken;
+  const id = viewerState.ids[viewerState.index];
   const d = state.designs.find(x => x.id === id);
-  if(!d || !d.blob){
-    slot.innerHTML = '<div class="skel"></div>';
-    return;
-  }
-  // Show skeleton while loading
-  if(!slot.querySelector('img') || slot.dataset.id !== id || slot.dataset.view !== viewerState.view){
-    slot.innerHTML = '<div class="skel"></div>';
-  }
-  slot.dataset.id = id;
-  slot.dataset.view = viewerState.view;
+  if(!d || !d.blob){ closeViewer(); return; }
+  const img = $('vImg');
+  const skel = $('vSkel');
+  // Show skeleton overlay but DO NOT clear the existing image yet —
+  // user keeps seeing the previous image until the new one is ready.
+  if(skel) skel.style.display = 'block';
   try {
     let url;
     if(viewerState.view === 'original'){
       const bm = await blobToBitmap(d.blob, 1400);
+      if(token !== viewerState.loadToken) return; // stale
       const c = document.createElement('canvas');
       c.width = bm.width; c.height = bm.height;
       c.getContext('2d').drawImage(bm, 0, 0);
@@ -1615,27 +1624,21 @@ async function renderToSlot(slot, idx){
     } else {
       url = await composite(d, state.settings, 1100);
     }
-    // Recheck: if user navigated away, abort
-    if(slot.dataset.id !== id || slot.dataset.view !== viewerState.view) return;
-    const img = document.createElement('img');
-    img.style.opacity = '0';
-    img.style.transition = 'opacity .15s';
-    img.onload = () => {
-      slot.innerHTML = '';
-      slot.appendChild(img);
-      requestAnimationFrame(() => img.style.opacity = '1');
+    if(token !== viewerState.loadToken) return; // stale - user already moved on
+    // Preload to avoid flash: only swap src once new image is loaded
+    const pre = new Image();
+    pre.onload = () => {
+      if(token !== viewerState.loadToken) return;
+      img.src = pre.src;
+      img.style.transform = `scale(${viewerState.zoom})`;
+      if(skel) skel.style.display = 'none';
     };
-    img.src = url;
-  } catch(e){ console.error('viewer renderToSlot', e); }
-}
-
-function renderViewerSlide(){
-  const prev = $('viewerTrack').querySelector('[data-slot="prev"]');
-  const cur = $('viewerTrack').querySelector('[data-slot="cur"]');
-  const next = $('viewerTrack').querySelector('[data-slot="next"]');
-  renderToSlot(cur, viewerState.index);
-  renderToSlot(prev, viewerState.index - 1);
-  renderToSlot(next, viewerState.index + 1);
+    pre.onerror = () => { if(skel) skel.style.display = 'none'; };
+    pre.src = url;
+  } catch(e){
+    console.error('viewer load', e);
+    if(skel) skel.style.display = 'none';
+  }
 }
 
 function updateViewerUI(){
@@ -1650,175 +1653,155 @@ function updateViewerUI(){
 }
 
 function gotoSlide(direction){
-  // direction: -1 prev, +1 next
   const newIdx = viewerState.index + direction;
   if(newIdx < 0 || newIdx >= viewerState.ids.length){
-    // Bounce back
-    positionSlots(true);
+    // Bounce back animation
+    const slide = $('vSlide');
+    if(slide){
+      slide.style.transition = 'transform .25s';
+      slide.style.transform = `translateX(${-direction * 30}px)`;
+      setTimeout(() => { slide.style.transform = 'translateX(0)'; }, 30);
+    }
     return;
   }
   viewerState.index = newIdx;
   viewerState.zoom = 1;
-  applyZoomTransform();
-  // Animate the appropriate slot offscreen and reposition all three
-  const track = $('viewerTrack');
-  const slides = track.querySelectorAll('.viewer-slide');
-  slides.forEach(s => {
-    s.style.transition = 'transform .28s cubic-bezier(.32,.72,0,1)';
-  });
-  // Shift positions: if direction +1 (next), current becomes prev, next becomes current, old prev becomes new next
-  if(direction === 1){
-    // Slide everything left
-    slides.forEach(s => {
-      const slot = s.dataset.slot;
-      if(slot === 'prev') s.style.transform = 'translateX(-200%)';
-      else if(slot === 'cur') s.style.transform = 'translateX(-100%)';
-      else if(slot === 'next') s.style.transform = 'translateX(0%)';
-    });
-  } else {
-    slides.forEach(s => {
-      const slot = s.dataset.slot;
-      if(slot === 'prev') s.style.transform = 'translateX(0%)';
-      else if(slot === 'cur') s.style.transform = 'translateX(100%)';
-      else if(slot === 'next') s.style.transform = 'translateX(200%)';
-    });
+  // Simple fade: dim slightly, swap, fade back in
+  const slide = $('vSlide');
+  if(slide){
+    slide.style.transition = 'transform .2s, opacity .15s';
+    slide.style.transform = `translateX(${-direction * 20}px)`;
+    slide.style.opacity = '0.5';
+    setTimeout(() => {
+      slide.style.transform = 'translateX(0)';
+      slide.style.opacity = '1';
+    }, 150);
   }
-  // After animation, rotate slot roles and reset positions
-  setTimeout(() => {
-    if(direction === 1){
-      // prev <- cur, cur <- next, next <- (load new)
-      const prev = track.querySelector('[data-slot="prev"]');
-      const cur = track.querySelector('[data-slot="cur"]');
-      const next = track.querySelector('[data-slot="next"]');
-      prev.dataset.slot = 'next-old';  // temp
-      cur.dataset.slot = 'prev';
-      next.dataset.slot = 'cur';
-      prev.dataset.slot = 'next';
-    } else {
-      const prev = track.querySelector('[data-slot="prev"]');
-      const cur = track.querySelector('[data-slot="cur"]');
-      const next = track.querySelector('[data-slot="next"]');
-      next.dataset.slot = 'prev-old';
-      cur.dataset.slot = 'next';
-      prev.dataset.slot = 'cur';
-      next.dataset.slot = 'prev';
-    }
-    positionSlots(false);
-    renderViewerSlide();
-    updateViewerUI();
-  }, 290);
+  loadCurrent();
+  updateViewerUI();
 }
 
-function applyZoomTransform(){
-  const img = $('viewerTrack').querySelector('[data-slot="cur"] img');
+function applyZoom(){
+  const img = $('vImg');
   if(img){
-    img.style.transition = 'transform .15s';
+    img.style.transition = 'transform .12s';
     img.style.transform = `scale(${viewerState.zoom})`;
   }
 }
 
-// Tap = toggle preview/original
-let viewerTapTimer = null, viewerLongPressed = false, tapStartTime = 0;
-$('viewerTrack').addEventListener('click', e => {
-  if(viewerState.dragging || viewerLongPressed){ viewerLongPressed = false; return; }
-  if(viewerState.zoom > 1.05) return; // ignore tap while zoomed
-  viewerState.view = viewerState.view === 'preview' ? 'original' : 'preview';
-  renderViewerSlide();
-  updateViewerUI();
-});
+// === Gesture handling ===
+let vSwipeStartX = 0, vSwipeStartY = 0, vSwipeAxis = null, vDragging = false;
+let vPinching = false, vPinchStartDist = 0, vPinchStartZoom = 1;
+let vTapTimer = null, vLongPressed = false;
 
-// Long-press = open card actions
-$('viewerTrack').addEventListener('touchstart', e => {
-  viewerLongPressed = false;
-  if(e.touches.length === 1){
-    viewerTapTimer = setTimeout(() => {
-      viewerLongPressed = true;
+const vTrack = $('viewerTrack');
+
+vTrack.addEventListener('touchstart', e => {
+  if(e.touches.length === 2){
+    vPinching = true;
+    vPinchStartDist = Math.hypot(
+      e.touches[0].clientX - e.touches[1].clientX,
+      e.touches[0].clientY - e.touches[1].clientY
+    );
+    vPinchStartZoom = viewerState.zoom;
+    clearTimeout(vTapTimer);
+    return;
+  }
+  if(e.touches.length === 1 && !vPinching){
+    vSwipeStartX = e.touches[0].clientX;
+    vSwipeStartY = e.touches[0].clientY;
+    vSwipeAxis = null;
+    vDragging = false;
+    vLongPressed = false;
+    // Long-press detection
+    clearTimeout(vTapTimer);
+    vTapTimer = setTimeout(() => {
+      vLongPressed = true;
       if(navigator.vibrate) navigator.vibrate(10);
       const id = viewerState.ids[viewerState.index];
       if(id) openCardActions(id);
     }, 500);
-  } else {
-    clearTimeout(viewerTapTimer);
-  }
-}, {passive:true});
-$('viewerTrack').addEventListener('touchend', () => clearTimeout(viewerTapTimer));
-$('viewerTrack').addEventListener('touchcancel', () => clearTimeout(viewerTapTimer));
-
-// Swipe + pinch handling
-$('viewerTrack').addEventListener('touchstart', e => {
-  if(e.touches.length === 2){
-    // Pinch start
-    viewerState.pinching = true;
-    viewerState.startDist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-    viewerState.startZoom = viewerState.zoom;
-    clearTimeout(viewerTapTimer);
-  } else if(e.touches.length === 1 && !viewerState.pinching){
-    viewerState.startX = e.touches[0].clientX;
-    viewerState.startY = e.touches[0].clientY;
-    viewerState.dragging = false;
-    viewerState.axis = null;
   }
 }, {passive:true});
 
-$('viewerTrack').addEventListener('touchmove', e => {
-  if(e.touches.length === 2 && viewerState.pinching){
-    const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-    let z = viewerState.startZoom * (d / viewerState.startDist);
+vTrack.addEventListener('touchmove', e => {
+  if(e.touches.length === 2 && vPinching){
+    const d = Math.hypot(
+      e.touches[0].clientX - e.touches[1].clientX,
+      e.touches[0].clientY - e.touches[1].clientY
+    );
+    let z = vPinchStartZoom * (d / vPinchStartDist);
     z = Math.max(1, Math.min(4, z));
     viewerState.zoom = z;
-    applyZoomTransform();
-    clearTimeout(viewerTapTimer);
+    applyZoom();
+    clearTimeout(vTapTimer);
     return;
   }
-  if(viewerState.pinching) return;
-  if(viewerState.zoom > 1.05) return; // when zoomed, don't pan-swipe
-  if(!e.touches[0]) return;
-  const dx = e.touches[0].clientX - viewerState.startX;
-  const dy = e.touches[0].clientY - viewerState.startY;
-  if(!viewerState.axis && (Math.abs(dx) > 8 || Math.abs(dy) > 8)){
-    viewerState.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+  if(vPinching || !e.touches[0]) return;
+  if(viewerState.zoom > 1.05) return; // no swipe while zoomed
+  const dx = e.touches[0].clientX - vSwipeStartX;
+  const dy = e.touches[0].clientY - vSwipeStartY;
+  if(!vSwipeAxis && (Math.abs(dx) > 8 || Math.abs(dy) > 8)){
+    vSwipeAxis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+    clearTimeout(vTapTimer);
   }
-  if(viewerState.axis === 'x'){
-    clearTimeout(viewerTapTimer);
-    viewerState.dragging = true;
-    const w = window.innerWidth;
-    const pct = (dx / w) * 100;
-    const slides = $('viewerTrack').querySelectorAll('.viewer-slide');
-    slides.forEach(s => {
-      const slot = s.dataset.slot;
-      s.style.transition = 'none';
-      let base = 0;
-      if(slot === 'prev') base = -100;
-      else if(slot === 'next') base = 100;
-      s.style.transform = `translateX(${base + pct}%)`;
-    });
+  if(vSwipeAxis === 'x'){
+    vDragging = true;
+    const slide = $('vSlide');
+    if(slide){
+      slide.style.transition = 'none';
+      slide.style.transform = `translateX(${dx}px)`;
+    }
   }
 }, {passive:true});
 
-$('viewerTrack').addEventListener('touchend', e => {
-  if(viewerState.pinching){
-    if(e.touches.length < 2){ viewerState.pinching = false; }
+vTrack.addEventListener('touchend', e => {
+  clearTimeout(vTapTimer);
+  if(vPinching){
+    if(e.touches.length < 2) vPinching = false;
     return;
   }
-  const dx = (e.changedTouches[0]?.clientX || 0) - viewerState.startX;
-  const dy = (e.changedTouches[0]?.clientY || 0) - viewerState.startY;
-  if(viewerState.axis === 'x' && Math.abs(dx) > 60){
+  const slide = $('vSlide');
+  const dx = (e.changedTouches[0]?.clientX || vSwipeStartX) - vSwipeStartX;
+  const dy = (e.changedTouches[0]?.clientY || vSwipeStartY) - vSwipeStartY;
+  if(vSwipeAxis === 'x' && Math.abs(dx) > 60){
+    // Confirmed swipe
     gotoSlide(dx < 0 ? 1 : -1);
-  } else if(viewerState.axis === 'y' && dy > 100){
+  } else if(vSwipeAxis === 'y' && dy > 100){
     closeViewer();
-  } else {
-    positionSlots(true);
+  } else if(slide){
+    // Snap back
+    slide.style.transition = 'transform .2s';
+    slide.style.transform = 'translateX(0)';
   }
-  viewerState.axis = null;
-  setTimeout(() => { viewerState.dragging = false; }, 50);
+  vSwipeAxis = null;
+  setTimeout(() => { vDragging = false; }, 50);
 }, {passive:true});
 
+vTrack.addEventListener('touchcancel', () => {
+  clearTimeout(vTapTimer);
+  vPinching = false;
+});
+
+// Tap = toggle preview / original
+vTrack.addEventListener('click', e => {
+  if(vDragging || vLongPressed){
+    vLongPressed = false;
+    return;
+  }
+  if(viewerState.zoom > 1.05) return;
+  viewerState.view = viewerState.view === 'preview' ? 'original' : 'preview';
+  loadCurrent();
+  updateViewerUI();
+});
+
+// Buttons
 $('viewerClose').onclick = closeViewer;
 $('viewerShirt').onclick = async () => {
   const id = viewerState.ids[viewerState.index];
   if(!id) return;
   await cycleShirt(id);
-  renderViewerSlide();
+  loadCurrent();
 };
 
 async function viewerSetStatus(status){
@@ -1831,7 +1814,7 @@ async function viewerSetStatus(status){
     viewerState.ids = stillIn;
     if(viewerState.ids.length === 0){ closeViewer(); return; }
     if(viewerState.index >= viewerState.ids.length) viewerState.index = viewerState.ids.length - 1;
-    renderViewerSlide();
+    loadCurrent();
     updateViewerUI();
   }
 }
