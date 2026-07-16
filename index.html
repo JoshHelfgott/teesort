@@ -240,6 +240,24 @@
   .cmp-pick.picked{background:#1f7a3d;color:#fff}
   .cmp-cell.zoom{position:fixed;inset:0;z-index:8;border-radius:0}
 
+
+  .fin-star{width:32px;height:32px;border-radius:50%;background:rgba(0,0,0,.6);color:rgba(255,255,255,.55);display:flex;align-items:center;justify-content:center;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);cursor:pointer;transition:transform .12s,background .15s,color .15s;padding:0;border:0}
+  .fin-star:active{transform:scale(0.9)}
+  .fin-star.on{background:#ffca3a;color:#111}
+  .fin-star svg{width:18px;height:18px}
+  .card.is-finalist{outline:2px solid rgba(255,202,58,.7);outline-offset:-2px}
+  .info-modal{position:fixed;inset:0;z-index:70;background:rgba(0,0,0,.7);display:none;align-items:center;justify-content:center;padding:20px}
+  .info-modal.open{display:flex}
+  .info-modal > .card{background:#161618;border-radius:16px;padding:18px;max-width:420px;width:100%;font-size:13px;color:rgba(255,255,255,.85);aspect-ratio:auto}
+  .info-modal h3{font-size:14px;font-weight:700;margin:0 0 10px;color:#fff}
+  .info-modal .row{display:flex;justify-content:space-between;padding:6px 0;border-top:1px solid rgba(255,255,255,.06);align-items:center}
+  .info-modal .row:first-of-type{border-top:0}
+  .info-modal .row span:first-child{color:rgba(255,255,255,.55)}
+  .info-modal .row span:last-child{font-family:ui-monospace,monospace;font-size:12px;text-align:right;max-width:60%;word-break:break-all}
+  .info-modal button{width:100%;height:44px;border-radius:12px;background:rgba(255,255,255,.1);color:#fff;font-weight:600;margin-top:12px;border:0}
+  .zip-progress{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:50;background:rgba(20,20,22,.98);border:1px solid rgba(255,255,255,.1);border-radius:14px;padding:12px 18px;font-size:13px;color:#fff;font-weight:600;min-width:260px;text-align:center;box-shadow:0 8px 32px rgba(0,0,0,.5)}
+  .zip-progress .bar{height:4px;border-radius:2px;background:rgba(255,255,255,.1);margin-top:8px;overflow:hidden}
+  .zip-progress .bar-fill{height:100%;background:#5eafff;transition:width .3s}
 </style>
 </head>
 <body>
@@ -312,7 +330,7 @@
         <button data-v="12x16">12&times;16</button>
         <button data-v="full">Full</button>
       </div>
-      <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:8px;line-height:1.4">Auto: vertical or square \u2192 15\u00d718, horizontal \u2192 narrow band 3" below collar.</div>
+      <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:8px;line-height:1.4">Auto: vertical or square → 15×18, horizontal → narrow band 3" below collar.</div>
     </div>
     <div class="sheet-section">
       <h3>Knockout</h3>
