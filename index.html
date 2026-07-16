@@ -324,11 +324,17 @@
       <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:6px;line-height:1.4">Lower if dark detail in your graphics is being eaten away.</div>
     </div>
     <div class="sheet-section">
-      <h3>Cleanup &amp; export</h3>
+      <h3>⭐ Finalists (production)</h3>
+      <button class="ghost" id="finExportZipOriginals" style="margin-top:0">Download Finalist ORIGINALS (ZIP)</button>
+      <button class="ghost" id="finExportZipTees">Download Finalist TEE previews (ZIP)</button>
+      <button class="ghost" id="finExportInfo">Finalist file info audit</button>
+      <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:6px;line-height:1.4">Downloads split into numbered ZIPs (Finalists_001.zip, 002...) so iOS can save each. Each ZIP contains a manifest.csv with filenames, dimensions, status.</div>
+
+      <h3 style="margin-top:16px">Cleanup &amp; export (Keeps)</h3>
       <button class="ghost" id="archiveRejected" style="margin-top:0">Archive all rejected designs</button>
-      <button class="ghost" id="exportKeeps">Export Keeps (originals)</button>
+      <button class="ghost" id="exportKeeps">Export Keeps (originals, share sheet)</button>
       <button class="ghost" id="exportAllKeeps">Re-export all Keeps</button>
-      <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:6px;line-height:1.4">Export shares the original HQ graphic files via iOS share sheet. Save to Photos or Files. Already-exported designs show a green dot and skip on the standard export.</div>
+      <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:6px;line-height:1.4">Legacy: shares HQ graphics via iOS share sheet in batches of 10.</div>
     </div>
     <div class="sheet-section">
       <button class="ghost danger" id="resetBatch">Reset batch (delete all)</button>
@@ -877,6 +883,7 @@ function renderFilters(){
   state.designs.forEach(d => {
     const k = d.status === 'inbox' || !STATUSES.includes(d.status) ? 'inbox' : d.status;
     counts[k] = (counts[k]||0) + 1;
+    if(d.finalist) counts.finalist++;
   });
   STATUSES.forEach(s => { if(!counts[s]) counts[s] = 0; });
   const items = [
@@ -988,7 +995,7 @@ function cardHtml(d){
   const editClass = (isEdited(d) || isBack) ? ' edited' : '';
   const backBadge = isBack ? '<span class="badge back-badge">BACK</span>' : '';
   return `
-    <div class="card${editClass}" data-id="${d.id}">
+    <div class="card${editClass}${d.finalist?' is-finalist':''}" data-id="${d.id}">
       <div class="card-preview">
         <div class="card-skeleton"></div>
         <div class="card-tl">
@@ -996,6 +1003,7 @@ function cardHtml(d){
           ${backBadge}
         </div>
         <div class="card-tr">
+          <button class="fin-star ${d.finalist?'on':''}" data-fin="${d.id}" aria-label="Toggle finalist"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.9 6.9 7.1.6-5.4 4.7 1.7 7.3L12 17.8 5.7 21.5l1.7-7.3L2 9.5l7.1-.6L12 2z"/></svg></button>
           ${(d.status && d.status !== 'inbox') ? `<span class="badge status status-${d.status}"><span class="label">${STATUS_LABELS[d.status]||d.status}</span></span>` : ''}
         </div>
       </div>
@@ -1023,9 +1031,24 @@ function attachCardHandlers(id){
   preview.addEventListener('click', e => {
     if(longPressed){ longPressed = false; e.preventDefault(); e.stopPropagation(); return; }
     if(e.target.closest('.badge.shirt')) return;
+    if(e.target.closest('.fin-star')) return;
     if(state.compareMode){ toggleCompareSelect(id); return; }
     openViewer(id);
   });
+  const star = el.querySelector('.fin-star');
+  if(star){
+    star.addEventListener('click', async e => {
+      e.stopPropagation(); e.preventDefault();
+      const d = state.designs.find(x => x.id === id);
+      if(!d) return;
+      d.finalist = !d.finalist;
+      await persistDesign(d);
+      star.classList.toggle('on', d.finalist);
+      el.classList.toggle('is-finalist', d.finalist);
+      renderFilters();
+      if(navigator.vibrate) navigator.vibrate(8);
+    });
+  }
   const badge = el.querySelector('.badge.shirt');
   badge.addEventListener('click', e => { e.stopPropagation(); e.preventDefault(); cycleShirt(id); });
   // BACK badge tappable to toggle back to front
@@ -1799,6 +1822,7 @@ $('fileInput').addEventListener('change', async e => {
         vOffsetOverride: 0,
         side: 'front',
         knockoutOverride: null,
+        finalist: false,
         status: 'inbox',
         notes: '',
         exportedAt: null,
@@ -2261,6 +2285,170 @@ window.addEventListener('pageshow', e => {
   }
   render();
 })();
+
+
+// ===== v14 Finalist ZIP export + audit =====
+function _showZipProgress(text, pct){
+  let el = document.getElementById('zipProgress');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'zipProgress'; el.className = 'zip-progress';
+    document.body.appendChild(el);
+  }
+  el.innerHTML = text + (pct != null ? `<div class="bar"><div class="bar-fill" style="width:${pct}%"></div></div>` : '');
+}
+function _hideZipProgress(){
+  const el = document.getElementById('zipProgress');
+  if(el) el.remove();
+}
+function _sanitizeName(n){ return (n || 'design').replace(/[^\w.\- ]+/g,'_').slice(0,80); }
+function _csvEscape(v){
+  if(v == null) return '';
+  const s = String(v);
+  if(/[",\n]/.test(s)) return '"' + s.replace(/"/g,'""') + '"';
+  return s;
+}
+function _buildManifest(items){
+  const header = ['filename','original_filename','status','finalist','shirt_color','side','size','notes','exported_at','created_at'];
+  const rows = [header.join(',')];
+  for(const it of items){
+    rows.push([
+      it.filename,
+      it.d.name || '',
+      it.d.status || '',
+      it.d.finalist ? 'yes' : 'no',
+      resolvedShirt(it.d, state.settings),
+      it.d.side || 'front',
+      resolvedSize(it.d, state.settings),
+      it.d.notes || '',
+      it.d.exportedAt ? new Date(it.d.exportedAt).toISOString() : '',
+      it.d.createdAt ? new Date(it.d.createdAt).toISOString() : ''
+    ].map(_csvEscape).join(','));
+  }
+  return rows.join('\n');
+}
+async function _saveBlob(blob, filename){
+  const file = new File([blob], filename, {type:'application/zip'});
+  try {
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({files:[file], title: filename});
+      return true;
+    }
+  } catch(e){ if(e.name === 'AbortError') return false; }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  return true;
+}
+const ZIP_TARGET_BYTES = 180 * 1024 * 1024; // ~180MB per ZIP
+async function exportFinalistZip(kind){
+  const finalists = state.designs.filter(d => d.finalist);
+  if(!finalists.length){ showToast('No finalists yet. Tap the \u2b50 on cards to mark them.'); return; }
+  if(typeof JSZip === 'undefined'){ showToast('ZIP library still loading, try again'); return; }
+  closeSettings();
+  _showZipProgress(`Preparing ${kind === 'tee' ? 'tee previews' : 'originals'}...`, 0);
+  const items = [];
+  for(let i = 0; i < finalists.length; i++){
+    const d = finalists[i];
+    _showZipProgress(`Rendering ${i+1}/${finalists.length}...`, (i / finalists.length) * 50);
+    try {
+      if(kind === 'tee'){
+        const dataUrl = await composite(d, state.settings, 1200);
+        const resp = await fetch(dataUrl);
+        const blob = await resp.blob();
+        const safe = _sanitizeName((d.name || d.id).replace(/\.(jpg|jpeg|png|webp|heic)$/i,''));
+        items.push({blob, filename: `${safe}_tee.jpg`, d});
+      } else {
+        if(!d.blob) continue;
+        const ext = ((d.blob.type||'image/png').split('/')[1] || 'png').replace('jpeg','jpg');
+        const safe = _sanitizeName((d.name || d.id).replace(/\.(jpg|jpeg|png|webp|heic)$/i,''));
+        items.push({blob: d.blob, filename: `${safe}.${ext}`, d});
+      }
+    } catch(e){ console.error('prep err', e); }
+  }
+  if(!items.length){ _hideZipProgress(); showToast('Nothing to export (no stored blobs)'); return; }
+  const chunks = [];
+  let current = [], currentBytes = 0;
+  for(const it of items){
+    const s = it.blob.size || 0;
+    if(current.length && currentBytes + s > ZIP_TARGET_BYTES){
+      chunks.push(current); current = []; currentBytes = 0;
+    }
+    current.push(it); currentBytes += s;
+  }
+  if(current.length) chunks.push(current);
+  const stamp = new Date().toISOString().slice(0,10).replace(/-/g,'');
+  const base = kind === 'tee' ? `Finalists_TEES_${stamp}` : `Finalists_${stamp}`;
+  for(let ci = 0; ci < chunks.length; ci++){
+    _showZipProgress(`Zipping ${ci+1}/${chunks.length}...`, 50 + ((ci+0.1) / chunks.length) * 40);
+    const zip = new JSZip();
+    for(const it of chunks[ci]) zip.file(it.filename, it.blob);
+    zip.file('manifest.csv', _buildManifest(chunks[ci]));
+    const blob = await zip.generateAsync({type:'blob', compression:'DEFLATE', compressionOptions:{level:1}},
+      m => { _showZipProgress(`Zipping ${ci+1}/${chunks.length}... ${Math.round(m.percent)}%`, 50 + ((ci + m.percent/100) / chunks.length) * 40); });
+    const num = String(ci+1).padStart(3,'0');
+    const fname = `${base}_${num}.zip`;
+    _showZipProgress(`Saving ${fname}...`, 92);
+    const ok = await _saveBlob(blob, fname);
+    if(!ok){ _hideZipProgress(); showToast(`Canceled at ZIP ${ci+1}/${chunks.length}`); return; }
+  }
+  _hideZipProgress();
+  showToast(`Exported ${items.length} files in ${chunks.length} ZIP${chunks.length===1?'':'s'}`);
+}
+async function showFinalistAudit(){
+  closeSettings();
+  const finalists = state.designs.filter(d => d.finalist);
+  const body = document.getElementById('finInfoBody');
+  document.getElementById('finInfoTitle').textContent = `Finalist file audit \u2014 ${finalists.length} designs`;
+  if(!finalists.length){
+    body.innerHTML = '<div style="padding:12px 0;color:rgba(255,255,255,.55)">No finalists yet. Tap the \u2b50 on any card.</div>';
+    document.getElementById('finInfoModal').classList.add('open');
+    return;
+  }
+  let totalBytes = 0, missing = 0;
+  const rows = [];
+  for(const d of finalists){
+    const hasBlob = !!d.blob;
+    if(!hasBlob) missing++;
+    const size = hasBlob ? d.blob.size : 0;
+    totalBytes += size;
+    let dims = '';
+    if(hasBlob){
+      try {
+        const bm = await blobToBitmap(d.blob, 100);
+        dims = `${bm.width || '?'}\u00d7${bm.height || '?'}`;
+      } catch(e){}
+    }
+    rows.push({name: d.name || d.id, size, dims, type: hasBlob ? (d.blob.type || '?') : 'MISSING'});
+  }
+  const totalMB = (totalBytes / (1024*1024)).toFixed(1);
+  const summary = `<div class="row"><span>Total finalists</span><span>${finalists.length}</span></div>
+    <div class="row"><span>Total size</span><span>${totalMB} MB</span></div>
+    <div class="row"><span>Missing originals</span><span>${missing}</span></div>
+    <div class="row"><span>Avg per file</span><span>${(totalBytes/finalists.length/(1024*1024)).toFixed(2)} MB</span></div>`;
+  const list = rows.slice(0, 40).map(r => `<div class="row"><span style="max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:inline-block">${r.name}</span><span>${r.dims} \u00b7 ${(r.size/1024).toFixed(0)}KB</span></div>`).join('');
+  const more = rows.length > 40 ? `<div class="row"><span>... and ${rows.length - 40} more</span><span></span></div>` : '';
+  body.innerHTML = summary + '<div style="margin-top:12px;font-size:11px;color:rgba(255,255,255,.4);text-transform:uppercase;letter-spacing:.5px">Files (first 40)</div>' + list + more;
+  document.getElementById('finInfoModal').classList.add('open');
+}
+document.getElementById('finInfoClose').onclick = () => document.getElementById('finInfoModal').classList.remove('open');
+document.getElementById('finExportZipOriginals').onclick = () => exportFinalistZip('original');
+document.getElementById('finExportZipTees').onclick = () => exportFinalistZip('tee');
+document.getElementById('finExportInfo').onclick = showFinalistAudit;
+
+// v14 finalist migration
+if(state.designs){ state.designs.forEach(d => { if(d.finalist === undefined) d.finalist = false; }); }
+
 </script>
+<!-- v14 Finalist file info audit modal -->
+<div class="info-modal" id="finInfoModal">
+  <div class="card">
+    <h3 id="finInfoTitle">Finalist file audit</h3>
+    <div id="finInfoBody" style="max-height:60vh;overflow:auto"></div>
+    <button id="finInfoClose">Close</button>
+  </div>
+</div>
 </body>
 </html>
