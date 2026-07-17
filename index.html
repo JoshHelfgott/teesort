@@ -350,7 +350,9 @@
 
       <h3 style="margin-top:16px">Rebuild previews</h3>
       <button class="ghost" id="rebuildPreviews">Rebuild all tee previews</button>
-      <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:6px;line-height:1.4">Force TeeSort to regenerate all shirt previews with the latest crop/placement.</div>
+      <button class="ghost" id="clearSizeOverrides">Clear per-card size overrides</button>
+      <button class="ghost" id="clearShirtOverrides">Clear per-card shirt overrides</button>
+      <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:6px;line-height:1.4">Clear overrides so the global Size / Shirt Color settings actually apply to all cards.</div>
 
       <h3 style="margin-top:16px">Cleanup &amp; export (Keeps)</h3>
       <button class="ghost" id="archiveRejected" style="margin-top:0">Archive all rejected designs</button>
@@ -2263,41 +2265,59 @@ async function _shareViewerItem(kind){
   if(!id) return;
   const d = state.designs.find(x => x.id === id);
   if(!d) return;
+  showToast('Preparing...');
+  let blob, filename, mime;
   try {
     if(kind === 'tee'){
-      // Tee mockup
       const dataUrl = await composite(d, state.settings, 1600);
       const resp = await fetch(dataUrl);
-      const blob = await resp.blob();
+      blob = await resp.blob();
       const safe = (d.name || 'design').replace(/\.(jpg|jpeg|png|webp|heic)$/i,'').replace(/[^\w.\- ]+/g,'_').slice(0,80);
-      const file = new File([blob], `${safe}_tee.jpg`, {type:'image/jpeg'});
-      if(navigator.canShare && navigator.canShare({files:[file]})){
-        await navigator.share({files:[file]});
-      } else {
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = file.name;
-        document.body.appendChild(a); a.click(); document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }
+      filename = `${safe}_tee.jpg`;
+      mime = 'image/jpeg';
     } else {
       if(!d.blob){ showToast('Original not available'); return; }
-      const ext = ((d.blob.type||'image/png').split('/')[1] || 'png').replace('jpeg','jpg');
+      blob = d.blob;
+      const ext = ((blob.type||'image/png').split('/')[1] || 'png').replace('jpeg','jpg');
       const safe = (d.name || 'design').replace(/\.(jpg|jpeg|png|webp|heic)$/i,'').replace(/[^\w.\- ]+/g,'_').slice(0,80);
-      const file = new File([d.blob], `${safe}.${ext}`, {type: d.blob.type || 'image/png'});
-      if(navigator.canShare && navigator.canShare({files:[file]})){
-        await navigator.share({files:[file]});
-      } else {
-        const url = URL.createObjectURL(d.blob);
-        const a = document.createElement('a');
-        a.href = url; a.download = file.name;
-        document.body.appendChild(a); a.click(); document.body.removeChild(a);
-        URL.revokeObjectURL(url);
-      }
+      filename = `${safe}.${ext}`;
+      mime = blob.type || 'image/png';
     }
-  } catch(e){
-    if(e.name !== 'AbortError') console.error('share err', e);
+  } catch(e){ console.error('prep err', e); showToast('Prep failed'); return; }
+  // Try Web Share (with files) first - works in Safari but often fails in PWA
+  const file = new File([blob], filename, {type: mime});
+  let shareWorked = false;
+  try {
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({files:[file]});
+      shareWorked = true;
+    }
+  } catch(e){ if(e.name === 'AbortError') return; console.warn('share failed, fallback', e); }
+  if(!shareWorked){
+    // Fallback: open blob URL in new tab. On iPhone Safari the user long-presses to Save Image.
+    const url = URL.createObjectURL(blob);
+    const w = window.open(url, '_blank');
+    if(!w){
+      // Popup blocked (typical in PWA): show inline preview with save instruction
+      showFallbackImagePreview(url, filename);
+    } else {
+      showToast('Opened image. Long-press to Save.');
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    }
   }
+}
+
+function showFallbackImagePreview(url, filename){
+  let m = document.getElementById('imgFallback');
+  if(!m){
+    m = document.createElement('div');
+    m.id = 'imgFallback';
+    m.style.cssText = 'position:fixed;inset:0;z-index:80;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px';
+    document.body.appendChild(m);
+  }
+  m.innerHTML = `<div style="color:#fff;text-align:center;margin-bottom:12px;font-size:13px">Long-press the image below to Save to Photos or Copy.<br><span style="color:rgba(255,255,255,.5);font-size:11px">${filename}</span></div>
+    <img src="${url}" style="max-width:100%;max-height:60vh;object-fit:contain;border-radius:8px;-webkit-touch-callout:default;-webkit-user-select:auto;user-select:auto">
+    <button style="margin-top:16px;padding:12px 24px;border-radius:12px;background:rgba(255,255,255,.15);color:#fff;font-weight:600;border:0" onclick="document.getElementById('imgFallback').remove()">Done</button>`;
 }
 $('viewerShare').onclick = () => {
   document.getElementById('shareSheet').classList.add('open');
@@ -2520,6 +2540,26 @@ document.getElementById('rebuildPreviews').onclick = () => {
   invalidateCache();
   closeSettings();
   showToast('Previews cleared. Rebuilding as you scroll.');
+  renderGrid();
+};
+document.getElementById('clearSizeOverrides').onclick = async () => {
+  let n = 0;
+  for(const d of state.designs){
+    if(d.sizeOverride){ d.sizeOverride = null; n++; await persistDesign(d); }
+  }
+  invalidateCache();
+  closeSettings();
+  showToast(`Cleared size override on ${n} designs`);
+  renderGrid();
+};
+document.getElementById('clearShirtOverrides').onclick = async () => {
+  let n = 0;
+  for(const d of state.designs){
+    if(d.shirtOverride){ d.shirtOverride = null; n++; await persistDesign(d); }
+  }
+  invalidateCache();
+  closeSettings();
+  showToast(`Cleared shirt override on ${n} designs`);
   renderGrid();
 };
 
