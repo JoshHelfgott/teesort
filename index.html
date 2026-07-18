@@ -708,12 +708,18 @@ const saveSettings = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.strin
 const saveView = () => { try { localStorage.setItem(VIEW_KEY, String(state.gridCols)); } catch(e){} };
 
 // ===== Image processing =====
-function loadImage(src){
+function loadImage(src, timeoutMs){
   return new Promise((res,rej)=>{
     const img = new Image();
+    let done = false;
+    const t = setTimeout(() => {
+      if(done) return;
+      done = true;
+      rej(new Error('image load timed out'));
+    }, timeoutMs || 12000);
     if(/^https?:/.test(src)) img.crossOrigin='anonymous';
-    img.onload = () => res(img);
-    img.onerror = () => rej(new Error('image load failed'));
+    img.onload = () => { if(done) return; done = true; clearTimeout(t); res(img); };
+    img.onerror = () => { if(done) return; done = true; clearTimeout(t); rej(new Error('image load failed')); };
     img.src = src;
   });
 }
@@ -942,7 +948,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.14 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.15 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -1213,9 +1219,25 @@ function attachCardHandlers(id){
 
 async function renderCardComposite(id, attempt){
   attempt = attempt || 0;
+  const _stopShimmer = (label) => {
+    const liveCard = document.querySelector(`.card[data-id="${id}"]`);
+    if(!liveCard) return;
+    const liveWrap = liveCard.querySelector('.card-preview');
+    if(!liveWrap) return;
+    const skel = liveWrap.querySelector('.card-skeleton');
+    if(skel) skel.remove();
+    if(!liveWrap.querySelector('img') && !liveWrap.querySelector('.card-err')){
+      const e = document.createElement('div');
+      e.className = 'card-err';
+      e.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;text-align:center;padding:8px;font-size:11px;color:rgba(255,255,255,.5);background:#1a1a1c';
+      e.textContent = label || 'No preview';
+      liveWrap.appendChild(e);
+    }
+  };
   try {
     const d = state.designs.find(x => x.id === id);
-    if(!d || !d.blob) return;
+    if(!d){ _stopShimmer('Missing'); return; }
+    if(!d.blob){ _stopShimmer('No image data'); return; }
     const outputW = state.gridCols === 1 ? 900 : state.gridCols === 2 ? 600 : 460;
     const cKey = cacheKey(d, state.settings, outputW);
     let url = compositeCache.get(cKey);
@@ -1239,6 +1261,8 @@ async function renderCardComposite(id, attempt){
       if(attempt < 1){
         invalidateCache(id);
         setTimeout(() => renderCardComposite(id, attempt+1), 120);
+      } else {
+        _stopShimmer('Decode failed');
       }
     };
     img.src = url;
@@ -1248,6 +1272,8 @@ async function renderCardComposite(id, attempt){
     if(attempt < 1){
       invalidateCache(id);
       setTimeout(() => renderCardComposite(id, attempt+1), 150);
+    } else {
+      _stopShimmer('Err: ' + (e.message || e).toString().slice(0, 40));
     }
   }
 }
