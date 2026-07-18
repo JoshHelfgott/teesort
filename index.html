@@ -942,7 +942,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.13 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.14 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -1109,7 +1109,7 @@ function attachCardHandlers(id){
     sizePill.addEventListener('click', async e => {
       e.stopPropagation(); e.preventDefault();
       const d = state.designs.find(x => x.id === id);
-      if(!d) return;
+      if(!d){ showToast('Design not found'); return; }
       const cur = resolvedSize(d, state.settings);
       const next = (cur === '12x16') ? '15x18' : '12x16';
       d.sizeOverride = next;
@@ -1117,12 +1117,38 @@ function attachCardHandlers(id){
       await persistDesign(d);
       const lbl = sizePill.querySelector('.cs-label');
       if(lbl) lbl.textContent = (next === '12x16') ? '12\u00d716' : '15\u00d718';
-      // v14.13: DON'T force-clean. renderCardComposite swaps img on load.
-      // Force-clean caused the card to go grey because we killed the old img before new one loaded.
-      renderCardComposite(id);
+      // v14.14: DIRECT composite + img swap. No renderCardComposite, no races.
+      try {
+        const outputW = state.gridCols === 1 ? 900 : state.gridCols === 2 ? 600 : 460;
+        const url = await composite(d, state.settings, outputW);
+        if(!url){ showToast('Composite empty'); return; }
+        const wrap = el.querySelector('.card-preview');
+        if(!wrap){ showToast('Card wrap gone'); return; }
+        // Preload then swap
+        const pre = new Image();
+        pre.onload = () => {
+          let existingImg = wrap.querySelector('img');
+          if(existingImg){
+            existingImg.src = pre.src;
+          } else {
+            const newImg = new Image();
+            newImg.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover';
+            newImg.src = pre.src;
+            wrap.insertBefore(newImg, wrap.firstChild);
+          }
+          const skel = wrap.querySelector('.card-skeleton');
+          if(skel) skel.remove();
+          el.dataset.rendered = '1';
+          if(navigator.vibrate) navigator.vibrate(6);
+        };
+        pre.onerror = () => showToast('Preload err');
+        pre.src = url;
+      } catch(err){
+        console.error('size pill err', err);
+        showToast('Err: ' + (err.message || err));
+      }
       updateCardShirtBadgeInPlace(d);
       if(typeof refreshViewerIfShowing === 'function') refreshViewerIfShowing(id);
-      if(navigator.vibrate) navigator.vibrate(6);
     });
   }
   const star = el.querySelector('.fin-star');
@@ -2434,43 +2460,44 @@ function showFallbackImagePreview(url, filename){
 }
 document.getElementById('viewerSizeBtn').onclick = async () => {
   const id = viewerState.ids[viewerState.index];
-  if(!id) return;
+  if(!id){ showToast('No viewer id'); return; }
   const d = state.designs.find(x => x.id === id);
-  if(!d) return;
+  if(!d){ showToast('Design not found'); return; }
   const cur = resolvedSize(d, state.settings);
   const next = (cur === '12x16') ? '15x18' : '12x16';
   d.sizeOverride = next;
   invalidateCache(d.id);
   await persistDesign(d);
-  // Update UI labels immediately so user sees confirmation
   const lbl = document.getElementById('viewerSizeBtnLabel');
   if(lbl) lbl.textContent = (next === '12x16') ? '12\u00d716' : '15\u00d718';
   const gridPillLabel = document.querySelector(`.card[data-id="${d.id}"] .card-size-pill .cs-label`);
   if(gridPillLabel) gridPillLabel.textContent = (next === '12x16') ? '12\u00d716' : '15\u00d718';
   if(navigator.vibrate) navigator.vibrate(6);
-  // Refresh the viewer composite. DO NOT touch the grid card yet - its img is the
-  // fallback source for the viewer while the new composite generates.
-  if(typeof loadCurrent === 'function') loadCurrent();
-  // Grid card refresh runs AFTER the viewer has swapped to the new composite.
-  // We wait for the loadToken to change indicating the new composite loaded.
-  const startToken = viewerState.loadToken;
-  const waitAndRefreshGrid = () => {
-    // Poll for viewer load completion (up to 6 seconds), then refresh grid card
-    let tries = 0;
-    const tick = () => {
-      tries++;
-      const vImg = document.getElementById('vImg');
-      const loaded = vImg && vImg.src && vImg.complete;
-      if(loaded || tries > 120){
-        updateCardShirtBadgeInPlace(d);
-        renderCardComposite(d.id);
-        return;
-      }
-      setTimeout(tick, 50);
+  // v14.14: DIRECT viewer composite regen with visible feedback
+  try {
+    const url = await composite(d, state.settings, 1100);
+    if(!url){ showToast('Composite empty'); return; }
+    const vImg = document.getElementById('vImg');
+    if(!vImg){ showToast('No vImg'); return; }
+    const pre = new Image();
+    pre.onload = () => {
+      vImg.src = pre.src;
+      const skel = document.getElementById('vSkel');
+      if(skel) skel.style.display = 'none';
+      showToast(`Size: ${next}`);
     };
-    tick();
-  };
-  waitAndRefreshGrid();
+    pre.onerror = () => showToast('Viewer preload err');
+    pre.src = url;
+  } catch(err){
+    console.error('viewer size err', err);
+    showToast('Err: ' + (err.message || err));
+  }
+  // Grid card refresh: only after we succeed above
+  setTimeout(() => {
+    updateCardShirtBadgeInPlace(d);
+    invalidateCache(d.id);
+    renderCardComposite(d.id);
+  }, 500);
 };
 $('viewerShare').onclick = () => {
   document.getElementById('shareSheet').classList.add('open');
