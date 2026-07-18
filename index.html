@@ -841,6 +841,26 @@ function cardSizeLabel(d){
   return '15\u00d718'; // default label for anything else, tapping will flip to 12x16
 }
 
+// v14.16: per-design decoded-bitmap cache. Decode the blob ONCE; reuse for every
+// size/shirt/side toggle. iOS Safari fails on repeated decodes of large blobs, which
+// caused "image load failed" every time the size button was pressed.
+const _designBitmapCache = new Map(); // id -> { bmp, maxSize }
+const DESIGN_BMP_LIMIT = 30;
+async function getDesignBitmap(d, maxSize){
+  const cached = _designBitmapCache.get(d.id);
+  if(cached && cached.maxSize >= maxSize) return cached.bmp;
+  const bmp = await blobToBitmap(d.blob, maxSize);
+  // Evict oldest if over limit (keep memory bounded on mobile)
+  if(_designBitmapCache.size >= DESIGN_BMP_LIMIT){
+    const firstKey = _designBitmapCache.keys().next().value;
+    const old = _designBitmapCache.get(firstKey);
+    if(old && old.bmp && old.bmp.close) { try { old.bmp.close(); } catch(e){} }
+    _designBitmapCache.delete(firstKey);
+  }
+  _designBitmapCache.set(d.id, { bmp, maxSize });
+  return bmp;
+}
+
 async function composite(d, settings, outputW){
   const key = cacheKey(d, settings, outputW);
   if(compositeCache.has(key)) return compositeCache.get(key);
@@ -850,8 +870,10 @@ async function composite(d, settings, outputW){
   // Knockout target = the graphic's OWN bg color (detected at import), not the selected
   // shirt color. This keeps graphic size constant when toggling shirt colors.
   const knockoutTarget = (d.resolvedShirt || shirtColor) === 'black' ? 0 : 255;
+  // v14.16: cache the decoded design canvas per-design so size/shirt toggles don't
+  // re-decode the blob (re-decoding large blobs fails on iOS Safari -> "image load failed").
   const [graphicBM, shirt] = await Promise.all([
-    blobToBitmap(d.blob, Math.max(1200, outputW * 1.5)),
+    getDesignBitmap(d, Math.max(1200, outputW * 1.5)),
     getShirtImage(shirtColor, side)
   ]);
   const aspect = shirt.height / shirt.width;
@@ -866,7 +888,7 @@ async function composite(d, settings, outputW){
   gC.width = graphicBM.width; gC.height = graphicBM.height;
   const gCx = gC.getContext('2d');
   gCx.drawImage(graphicBM, 0, 0);
-  if(graphicBM.close) graphicBM.close();
+  // v14.16: do NOT close graphicBM here - it's cached and reused for size/shirt toggles.
   const gd = gCx.getImageData(0, 0, gC.width, gC.height);
   const gp = gd.data;
   const knockoutPct = (d.knockoutOverride != null) ? d.knockoutOverride : settings.knockout;
@@ -948,7 +970,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.15 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.16 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
