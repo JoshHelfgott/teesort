@@ -193,6 +193,16 @@
   .viewer-foot > *{pointer-events:auto}
   .viewer-foot button{pointer-events:auto;touch-action:manipulation}
   .viewer-actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;max-width:340px;margin:0 auto}
+  /* v14.8 size-toggle pill: floating, thumb-reachable, bottom-right */
+  .size-pill{position:absolute;right:14px;bottom:calc(env(safe-area-inset-bottom) + 128px);z-index:6;
+    height:52px;min-width:96px;padding:0 18px;border-radius:26px;
+    background:rgba(20,20,22,.94);color:#fff;font-size:15px;font-weight:700;
+    display:flex;align-items:center;justify-content:center;gap:8px;
+    border:1px solid rgba(255,255,255,.14);box-shadow:0 6px 20px rgba(0,0,0,.5);
+    -webkit-tap-highlight-color:transparent;touch-action:manipulation;cursor:pointer;
+    transition:transform .12s,background .15s}
+  .size-pill:active{transform:scale(.94);background:#fff;color:#111}
+  .size-pill svg{width:14px;height:14px;opacity:.6}
   .viewer-action{height:46px;border-radius:12px;background:rgba(255,255,255,.12);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);color:#fff;font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:6px;transition:transform .08s;pointer-events:auto;touch-action:manipulation;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:rgba(255,255,255,.1)}
   .viewer-action:active{transform:scale(.96)}
   .viewer-action svg{width:16px;height:16px}
@@ -510,6 +520,10 @@
   </div>
   <div class="viewer-pos top" id="viewerPos">1 / 1</div>
   <div class="viewer-track" id="viewerTrack"></div>
+  <button class="size-pill" id="viewerSizePill" aria-label="Toggle size">
+    <span id="viewerSizePillLabel">15×18</span>
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3l4 4-4 4M21 7H3M7 21l-4-4 4-4M3 17h18"/></svg>
+  </button>
   <div class="viewer-foot">
     <div class="viewer-hint">Tap = Preview / Original  •  Swipe = next  •  Long-press = options</div>
     <div class="viewer-actions">
@@ -2119,6 +2133,8 @@ function updateViewerUI(){
   if(!d){ closeViewer(); return; }
   $('viewerPos').textContent = `${viewerState.index + 1} / ${viewerState.ids.length}`;
   $('viewerLabel').textContent = viewerState.view === 'original' ? 'Original' : (d.name || 'Preview');
+  // v14.8 update size pill to reflect this design's effective size
+  updateSizePill(d);
   $('vaKeep').classList.toggle('on', d.status === 'round1');
   $('vaFix').classList.toggle('on', d.status === 'needs_fixing');
   $('vaReject').classList.toggle('on', d.status === 'rejected');
@@ -2608,6 +2624,50 @@ document.getElementById('shareTee').onclick = async () => {
   _closeShareSheet();
   await _shareViewerItem('tee');
 };
+
+// v14.8 size pill: shows current effective size, tap toggles 12x16 <-> 15x18
+function updateSizePill(d){
+  if(!d) return;
+  const eff = resolvedSize(d, state.settings);
+  const label = document.getElementById('viewerSizePillLabel');
+  if(!label) return;
+  // Only show 12x16 or 15x18 states on the pill; if effective is something else, still show but tap flips to 15x18
+  const shown = (eff === '12x16' || eff === '15x18') ? eff : '15x18';
+  label.textContent = shown === '12x16' ? '12\u00d716' : '15\u00d718';
+}
+
+document.getElementById('viewerSizePill').addEventListener('click', async (e) => {
+  e.stopPropagation();
+  const id = viewerState.ids[viewerState.index];
+  if(!id) return;
+  const d = state.designs.find(x => x.id === id);
+  if(!d) return;
+  const cur = resolvedSize(d, state.settings);
+  // Flip: if currently 12x16, go to 15x18; anything else -> 12x16
+  const next = (cur === '12x16') ? '15x18' : '12x16';
+  d.sizeOverride = next;
+  invalidateCache(d.id);
+  await persistDesign(d);
+  updateSizePill(d);
+  updateCardShirtBadgeInPlace(d);
+  // force-clean re-render for the grid card + viewer
+  const card = document.querySelector(`.card[data-id="${d.id}"]`);
+  if(card){
+    const wrap = card.querySelector('.card-preview');
+    if(wrap){
+      wrap.querySelectorAll('img').forEach(x => x.remove());
+      if(!wrap.querySelector('.card-skeleton')){
+        const sk = document.createElement('div');
+        sk.className = 'card-skeleton';
+        wrap.appendChild(sk);
+      }
+      card.dataset.rendered = '';
+    }
+  }
+  renderCardComposite(d.id);
+  if(typeof loadCurrent === 'function') loadCurrent();
+  if(navigator.vibrate) navigator.vibrate(6);
+});
 
 // v14 finalist migration
 if(state.designs){ state.designs.forEach(d => { if(d.finalist === undefined) d.finalist = false; }); }
