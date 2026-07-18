@@ -193,16 +193,16 @@
   .viewer-foot > *{pointer-events:auto}
   .viewer-foot button{pointer-events:auto;touch-action:manipulation}
   .viewer-actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;max-width:340px;margin:0 auto}
-  /* v14.8 size-toggle pill: floating, thumb-reachable, bottom-right */
-  .size-pill{position:absolute;right:14px;bottom:calc(env(safe-area-inset-bottom) + 128px);z-index:6;
-    height:52px;min-width:96px;padding:0 18px;border-radius:26px;
-    background:rgba(20,20,22,.94);color:#fff;font-size:15px;font-weight:700;
-    display:flex;align-items:center;justify-content:center;gap:8px;
-    border:1px solid rgba(255,255,255,.14);box-shadow:0 6px 20px rgba(0,0,0,.5);
-    -webkit-tap-highlight-color:transparent;touch-action:manipulation;cursor:pointer;
-    transition:transform .12s,background .15s}
-  .size-pill:active{transform:scale(.94);background:#fff;color:#111}
-  .size-pill svg{width:14px;height:14px;opacity:.6}
+  /* v14.9 per-card size pill: bottom-right of each grid card, thumb reach */
+  .card-size-pill{position:absolute;bottom:8px;right:8px;z-index:5;
+    height:28px;padding:0 12px;border-radius:14px;
+    background:rgba(20,20,22,.88);color:#fff;font-size:11.5px;font-weight:700;
+    display:inline-flex;align-items:center;gap:5px;
+    border:1px solid rgba(255,255,255,.14);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+    -webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;-webkit-user-select:none;user-select:none;
+    touch-action:manipulation;cursor:pointer;transition:transform .1s,background .15s}
+  .card-size-pill:active{transform:scale(.92);background:#fff;color:#111}
+  .card-size-pill svg{width:11px;height:11px;opacity:.55}
   .viewer-action{height:46px;border-radius:12px;background:rgba(255,255,255,.12);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);color:#fff;font-size:13px;font-weight:600;display:flex;align-items:center;justify-content:center;gap:6px;transition:transform .08s;pointer-events:auto;touch-action:manipulation;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:rgba(255,255,255,.1)}
   .viewer-action:active{transform:scale(.96)}
   .viewer-action svg{width:16px;height:16px}
@@ -520,10 +520,6 @@
   </div>
   <div class="viewer-pos top" id="viewerPos">1 / 1</div>
   <div class="viewer-track" id="viewerTrack"></div>
-  <button class="size-pill" id="viewerSizePill" aria-label="Toggle size">
-    <span id="viewerSizePillLabel">15×18</span>
-    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3l4 4-4 4M21 7H3M7 21l-4-4 4-4M3 17h18"/></svg>
-  </button>
   <div class="viewer-foot">
     <div class="viewer-hint">Tap = Preview / Original  •  Swipe = next  •  Long-press = options</div>
     <div class="viewer-actions">
@@ -816,6 +812,11 @@ function resolvedSize(d, settings){
   const ar = d.aspectRatio || 1;
   return ar > 1.3 ? 'horizontal' : '15x18';
 }
+function cardSizeLabel(d){
+  const eff = resolvedSize(d, state.settings);
+  if(eff === '12x16') return '12\u00d716';
+  return '15\u00d718'; // default label for anything else, tapping will flip to 12x16
+}
 
 async function composite(d, settings, outputW){
   const key = cacheKey(d, settings, outputW);
@@ -1055,6 +1056,7 @@ function cardHtml(d){
           <button class="fin-star ${d.finalist?'on':''}" data-fin="${d.id}" aria-label="Toggle finalist"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.9 6.9 7.1.6-5.4 4.7 1.7 7.3L12 17.8 5.7 21.5l1.7-7.3L2 9.5l7.1-.6L12 2z"/></svg></button>
           ${(d.status && d.status !== 'inbox') ? `<span class="badge status status-${d.status}"><span class="label">${STATUS_LABELS[d.status]||d.status}</span></span>` : ''}
         </div>
+        <button class="card-size-pill" data-size-toggle aria-label="Toggle size"><span class="cs-label">${cardSizeLabel(d)}</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3l4 4-4 4M21 7H3M7 21l-4-4 4-4M3 17h18"/></svg></button>
       </div>
       <div class="actions">
         <button class="action keep ${d.status==='round1'?'on':''}" aria-label="Keep">
@@ -1081,9 +1083,40 @@ function attachCardHandlers(id){
     if(longPressed){ longPressed = false; e.preventDefault(); e.stopPropagation(); return; }
     if(e.target.closest('.badge.shirt')) return;
     if(e.target.closest('.fin-star')) return;
+    if(e.target.closest('.card-size-pill')) return;
     if(state.compareMode){ toggleCompareSelect(id); return; }
     openViewer(id);
   });
+  const sizePill = el.querySelector('.card-size-pill');
+  if(sizePill){
+    sizePill.addEventListener('click', async e => {
+      e.stopPropagation(); e.preventDefault();
+      const d = state.designs.find(x => x.id === id);
+      if(!d) return;
+      const cur = resolvedSize(d, state.settings);
+      const next = (cur === '12x16') ? '15x18' : '12x16';
+      d.sizeOverride = next;
+      invalidateCache(d.id);
+      await persistDesign(d);
+      const lbl = sizePill.querySelector('.cs-label');
+      if(lbl) lbl.textContent = (next === '12x16') ? '12\u00d716' : '15\u00d718';
+      // Force-clean re-render (same pattern as size handler in sheet)
+      const wrap = el.querySelector('.card-preview');
+      if(wrap){
+        wrap.querySelectorAll('img').forEach(x => x.remove());
+        if(!wrap.querySelector('.card-skeleton')){
+          const sk = document.createElement('div');
+          sk.className = 'card-skeleton';
+          wrap.appendChild(sk);
+        }
+        el.dataset.rendered = '';
+      }
+      renderCardComposite(id);
+      updateCardShirtBadgeInPlace(d);
+      if(typeof refreshViewerIfShowing === 'function') refreshViewerIfShowing(id);
+      if(navigator.vibrate) navigator.vibrate(6);
+    });
+  }
   const star = el.querySelector('.fin-star');
   if(star){
     star.addEventListener('click', async e => {
@@ -2133,8 +2166,6 @@ function updateViewerUI(){
   if(!d){ closeViewer(); return; }
   $('viewerPos').textContent = `${viewerState.index + 1} / ${viewerState.ids.length}`;
   $('viewerLabel').textContent = viewerState.view === 'original' ? 'Original' : (d.name || 'Preview');
-  // v14.8 update size pill to reflect this design's effective size
-  updateSizePill(d);
   $('vaKeep').classList.toggle('on', d.status === 'round1');
   $('vaFix').classList.toggle('on', d.status === 'needs_fixing');
   $('vaReject').classList.toggle('on', d.status === 'rejected');
@@ -2624,50 +2655,6 @@ document.getElementById('shareTee').onclick = async () => {
   _closeShareSheet();
   await _shareViewerItem('tee');
 };
-
-// v14.8 size pill: shows current effective size, tap toggles 12x16 <-> 15x18
-function updateSizePill(d){
-  if(!d) return;
-  const eff = resolvedSize(d, state.settings);
-  const label = document.getElementById('viewerSizePillLabel');
-  if(!label) return;
-  // Only show 12x16 or 15x18 states on the pill; if effective is something else, still show but tap flips to 15x18
-  const shown = (eff === '12x16' || eff === '15x18') ? eff : '15x18';
-  label.textContent = shown === '12x16' ? '12\u00d716' : '15\u00d718';
-}
-
-document.getElementById('viewerSizePill').addEventListener('click', async (e) => {
-  e.stopPropagation();
-  const id = viewerState.ids[viewerState.index];
-  if(!id) return;
-  const d = state.designs.find(x => x.id === id);
-  if(!d) return;
-  const cur = resolvedSize(d, state.settings);
-  // Flip: if currently 12x16, go to 15x18; anything else -> 12x16
-  const next = (cur === '12x16') ? '15x18' : '12x16';
-  d.sizeOverride = next;
-  invalidateCache(d.id);
-  await persistDesign(d);
-  updateSizePill(d);
-  updateCardShirtBadgeInPlace(d);
-  // force-clean re-render for the grid card + viewer
-  const card = document.querySelector(`.card[data-id="${d.id}"]`);
-  if(card){
-    const wrap = card.querySelector('.card-preview');
-    if(wrap){
-      wrap.querySelectorAll('img').forEach(x => x.remove());
-      if(!wrap.querySelector('.card-skeleton')){
-        const sk = document.createElement('div');
-        sk.className = 'card-skeleton';
-        wrap.appendChild(sk);
-      }
-      card.dataset.rendered = '';
-    }
-  }
-  renderCardComposite(d.id);
-  if(typeof loadCurrent === 'function') loadCurrent();
-  if(navigator.vibrate) navigator.vibrate(6);
-});
 
 // v14 finalist migration
 if(state.designs){ state.designs.forEach(d => { if(d.finalist === undefined) d.finalist = false; }); }
