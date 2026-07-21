@@ -657,14 +657,14 @@ const STATUS_LABELS = {inbox:'New', round1:'Keep', needs_fixing:'Fix', rejected:
 // 15x18 sized to feel like an oversized chest print (the user's default)
 // Full bounded to torso width only (no shoulder/sleeve bleed)
 const ZONES_FRONT = {
-  '15x18':      {maxW:0.355, maxH:0.341, topY:0.205, centerX:0.500, label:'15\u00d718'},
-  '12x16':      {maxW:0.284, maxH:0.303, topY:0.215, centerX:0.500, label:'12\u00d716'},
+  '15x18':      {maxW:0.396, maxH:0.380, topY:0.180, centerX:0.500, label:'15\u00d718'},
+  '12x16':      {maxW:0.317, maxH:0.338, topY:0.195, centerX:0.500, label:'12\u00d716'},
   'horizontal': {maxW:0.420, maxH:0.140, topY:0.275, centerX:0.500, label:'Horizontal'},
   'full':       {maxW:0.440, maxH:0.520, topY:0.172, centerX:0.500, label:'Full front'}
 };
 const ZONES_BACK = {
-  '15x18':      {maxW:0.325, maxH:0.312, topY:0.190, centerX:0.500, label:'15\u00d718'},
-  '12x16':      {maxW:0.260, maxH:0.277, topY:0.200, centerX:0.500, label:'12\u00d716'},
+  '15x18':      {maxW:0.374, maxH:0.359, topY:0.170, centerX:0.500, label:'15\u00d718'},
+  '12x16':      {maxW:0.299, maxH:0.319, topY:0.185, centerX:0.500, label:'12\u00d716'},
   'horizontal': {maxW:0.360, maxH:0.130, topY:0.255, centerX:0.500, label:'Horizontal'},
   'full':       {maxW:0.390, maxH:0.480, topY:0.165, centerX:0.500, label:'Full back'}
 };
@@ -970,7 +970,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.17 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.18 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
