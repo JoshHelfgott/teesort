@@ -970,7 +970,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.22 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.23 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -1032,7 +1032,69 @@ function ensureCardObserver(){
 }
 
 const PAGE_SIZE = 60;
+let _sizeDelegationReady = false;
+const _sizeToggleLock = new Set();
+function initSizeDelegation(){
+  if(_sizeDelegationReady) return;
+  _sizeDelegationReady = true;
+  main.addEventListener('click', async (e) => {
+    const pill = e.target.closest('.card-size-pill');
+    if(!pill) return;
+    e.stopPropagation(); e.preventDefault();
+    const id = pill.getAttribute('data-size-pill') || (pill.closest('.card') && pill.closest('.card').getAttribute('data-id'));
+    if(!id) return;
+    if(_sizeToggleLock.has(id)) return;   // ignore taps while one is in flight
+    _sizeToggleLock.add(id);
+    try {
+      const d = state.designs.find(x => x.id === id);
+      if(!d){ showToast('Design not found'); return; }
+      const cur = resolvedSize(d, state.settings);
+      const next = (cur === '12x16') ? '15x18' : '12x16';
+      d.sizeOverride = next;
+      invalidateCache(d.id);
+      await persistDesign(d);
+      const nextLabel = (next === '12x16') ? '12\u00d716' : '15\u00d718';
+      const liveCard = document.querySelector(`.card[data-id="${id}"]`);
+      if(!liveCard) return;
+      const liveLbl = liveCard.querySelector('.card-size-pill .cs-label');
+      if(liveLbl) liveLbl.textContent = nextLabel;
+      const outputW = state.gridCols === 1 ? 900 : state.gridCols === 2 ? 600 : 460;
+      let url;
+      try { url = await composite(d, state.settings, outputW); }
+      catch(err){ showToast('Err: '+(err.message||err)); return; }
+      if(!url){ showToast('Composite empty'); return; }
+      const wrap = liveCard.querySelector('.card-preview');
+      if(!wrap) return;
+      await new Promise((res) => {
+        const pre = new Image();
+        pre.onload = () => {
+          let img = wrap.querySelector('img');
+          if(img){ img.src = pre.src; }
+          else {
+            img = new Image();
+            img.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover';
+            img.src = pre.src;
+            wrap.insertBefore(img, wrap.firstChild);
+          }
+          const skel = wrap.querySelector('.card-skeleton');
+          if(skel) skel.remove();
+          liveCard.dataset.rendered = '1';
+          if(navigator.vibrate) navigator.vibrate(6);
+          res();
+        };
+        pre.onerror = () => { showToast('Preload err'); res(); };
+        pre.src = url;
+      });
+      updateCardShirtBadgeInPlace(d);
+      if(typeof refreshViewerIfShowing === 'function') refreshViewerIfShowing(id);
+    } finally {
+      _sizeToggleLock.delete(id);
+    }
+  });
+}
+
 function renderGrid(){
+  initSizeDelegation();
   const filtered = getFiltered();
   if(filtered.length === 0){
     main.innerHTML = `<div style="margin-top:80px;text-align:center;color:rgba(255,255,255,.4);font-size:14px">Nothing in this filter.</div>`;
@@ -1134,53 +1196,10 @@ function attachCardHandlers(id){
   });
   const sizePill = el.querySelector('.card-size-pill');
   if(sizePill){
-    sizePill.addEventListener('click', async e => {
-      e.stopPropagation(); e.preventDefault();
-      const d = state.designs.find(x => x.id === id);
-      if(!d){ showToast('Design not found'); return; }
-      const cur = resolvedSize(d, state.settings);
-      const next = (cur === '12x16') ? '15x18' : '12x16';
-      d.sizeOverride = next;
-      invalidateCache(d.id);
-      await persistDesign(d);
-      const nextLabel = (next === '12x16') ? '12\u00d716' : '15\u00d718';
-      // Always target the LIVE card in the DOM, not the captured el (which may be stale
-      // after a re-render). Update label on the live pill.
-      const liveCard = document.querySelector(`.card[data-id="${id}"]`) || el;
-      const liveLbl = liveCard.querySelector('.card-size-pill .cs-label');
-      if(liveLbl) liveLbl.textContent = nextLabel;
-      showToast('\u2192 ' + nextLabel);
-      try {
-        const outputW = state.gridCols === 1 ? 900 : state.gridCols === 2 ? 600 : 460;
-        const url = await composite(d, state.settings, outputW);
-        if(!url){ showToast('Composite empty'); return; }
-        const wrap = liveCard.querySelector('.card-preview');
-        if(!wrap){ showToast('Card wrap gone'); return; }
-        const pre = new Image();
-        pre.onload = () => {
-          let existingImg = wrap.querySelector('img');
-          if(existingImg){
-            existingImg.src = pre.src;
-          } else {
-            const newImg = new Image();
-            newImg.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;object-fit:cover';
-            newImg.src = pre.src;
-            wrap.insertBefore(newImg, wrap.firstChild);
-          }
-          const skel = wrap.querySelector('.card-skeleton');
-          if(skel) skel.remove();
-          liveCard.dataset.rendered = '1';
-          if(navigator.vibrate) navigator.vibrate(6);
-        };
-        pre.onerror = () => showToast('Preload err');
-        pre.src = url;
-      } catch(err){
-        console.error('size pill err', err);
-        showToast('Err: ' + (err.message || err));
-      }
-      updateCardShirtBadgeInPlace(d);
-      if(typeof refreshViewerIfShowing === 'function') refreshViewerIfShowing(id);
-    });
+    // Size pill clicks handled by ONE delegated listener on `main` (see initSizeDelegation).
+    // Per-card listeners went stale after re-renders on large libraries, causing the
+    // "changes once then stops" bug. Delegation survives every re-render.
+    sizePill.setAttribute('data-size-pill', id);
   }
   const star = el.querySelector('.fin-star');
   if(star){
