@@ -657,13 +657,13 @@ const STATUS_LABELS = {inbox:'New', round1:'Keep', needs_fixing:'Fix', rejected:
 // 15x18 sized to feel like an oversized chest print (the user's default)
 // Full bounded to torso width only (no shoulder/sleeve bleed)
 const ZONES_FRONT = {
-  '15x18':      {maxW:0.396, maxH:0.380, topY:0.215, centerX:0.500, label:'15\u00d718'},
+  '15x18':      {maxW:0.396, maxH:0.380, topY:0.200, centerX:0.500, label:'15\u00d718'},
   '12x16':      {maxW:0.317, maxH:0.338, topY:0.215, centerX:0.500, label:'12\u00d716'},
   'horizontal': {maxW:0.420, maxH:0.140, topY:0.275, centerX:0.500, label:'Horizontal'},
   'full':       {maxW:0.440, maxH:0.520, topY:0.172, centerX:0.500, label:'Full front'}
 };
 const ZONES_BACK = {
-  '15x18':      {maxW:0.374, maxH:0.359, topY:0.200, centerX:0.500, label:'15\u00d718'},
+  '15x18':      {maxW:0.374, maxH:0.359, topY:0.188, centerX:0.500, label:'15\u00d718'},
   '12x16':      {maxW:0.299, maxH:0.319, topY:0.200, centerX:0.500, label:'12\u00d716'},
   'horizontal': {maxW:0.360, maxH:0.130, topY:0.255, centerX:0.500, label:'Horizontal'},
   'full':       {maxW:0.390, maxH:0.480, topY:0.165, centerX:0.500, label:'Full back'}
@@ -970,7 +970,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.20 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.21 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -1149,6 +1149,7 @@ function attachCardHandlers(id){
       const liveCard = document.querySelector(`.card[data-id="${id}"]`) || el;
       const liveLbl = liveCard.querySelector('.card-size-pill .cs-label');
       if(liveLbl) liveLbl.textContent = nextLabel;
+      showToast('\u2192 ' + nextLabel);
       try {
         const outputW = state.gridCols === 1 ? 900 : state.gridCols === 2 ? 600 : 460;
         const url = await composite(d, state.settings, outputW);
