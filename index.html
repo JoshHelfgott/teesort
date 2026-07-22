@@ -657,14 +657,16 @@ const STATUS_LABELS = {inbox:'New', round1:'Keep', needs_fixing:'Fix', rejected:
 // 15x18 sized to feel like an oversized chest print (the user's default)
 // Full bounded to torso width only (no shoulder/sleeve bleed)
 const ZONES_FRONT = {
-  '15x18':      {maxW:0.396, maxH:0.380, topY:0.200, centerX:0.500, label:'15\u00d718'},
-  '12x16':      {maxW:0.317, maxH:0.338, topY:0.215, centerX:0.500, label:'12\u00d716'},
+  // v14.25: both sizes scaled +4% together (locked 80%/89% ratio preserved) - user wanted slightly bigger
+  '15x18':      {maxW:0.412, maxH:0.395, topY:0.200, centerX:0.500, label:'15\u00d718'},
+  '12x16':      {maxW:0.330, maxH:0.352, topY:0.215, centerX:0.500, label:'12\u00d716'},
   'horizontal': {maxW:0.420, maxH:0.140, topY:0.275, centerX:0.500, label:'Horizontal'},
   'full':       {maxW:0.440, maxH:0.520, topY:0.172, centerX:0.500, label:'Full front'}
 };
 const ZONES_BACK = {
-  '15x18':      {maxW:0.374, maxH:0.359, topY:0.188, centerX:0.500, label:'15\u00d718'},
-  '12x16':      {maxW:0.299, maxH:0.319, topY:0.200, centerX:0.500, label:'12\u00d716'},
+  // v14.25: both sizes scaled +4% together (matches front bump, keeps ratios locked)
+  '15x18':      {maxW:0.389, maxH:0.373, topY:0.188, centerX:0.500, label:'15\u00d718'},
+  '12x16':      {maxW:0.311, maxH:0.332, topY:0.200, centerX:0.500, label:'12\u00d716'},
   'horizontal': {maxW:0.360, maxH:0.130, topY:0.255, centerX:0.500, label:'Horizontal'},
   'full':       {maxW:0.390, maxH:0.480, topY:0.165, centerX:0.500, label:'Full back'}
 };
@@ -970,7 +972,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.24 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.25 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -1042,7 +1044,6 @@ function initSizeDelegation(){
     if(!pill) return;
     e.stopPropagation(); e.preventDefault();
     const id = pill.getAttribute('data-size-pill') || (pill.closest('.card') && pill.closest('.card').getAttribute('data-id'));
-    if(window.tslog) tslog('  → GRID main-handler id=' + (id||'?'));
     if(!id) return;
     if(_sizeToggleLock.has(id)) return;   // ignore taps while one is in flight
     _sizeToggleLock.add(id);
@@ -2530,7 +2531,6 @@ function showFallbackImagePreview(url, filename){
     <button style="margin-top:16px;padding:12px 24px;border-radius:12px;background:rgba(255,255,255,.15);color:#fff;font-weight:600;border:0" onclick="document.getElementById('imgFallback').remove()">Done</button>`;
 }
 const _el1=document.getElementById('viewerSizeBtn'); if(_el1) _el1.onclick = async () => {
-  if(window.tslog) tslog('  → VIEW onclick-handler');
   const id = viewerState.ids[viewerState.index];
   if(!id){ showToast('No viewer id'); return; }
   const d = state.designs.find(x => x.id === id);
@@ -2828,78 +2828,6 @@ const _el9=document.getElementById('shareTee'); if(_el9) _el9.onclick = async ()
 
 // v14 finalist migration
 if(state.designs){ state.designs.forEach(d => { if(d.finalist === undefined) d.finalist = false; }); }
-
-// ===== v14.24 iOS size-pill TOUCH DIAGNOSTIC =====
-// The size pill fires in headless Chrome but does nothing on iOS. Headless uses real
-// DOM clicks; iOS synthesizes a click from a touch and that click can be swallowed by
-// an overlay, a preventDefault, or a hit-testing quirk (e.g. backdrop-filter).
-// This on-screen log (console isn't visible in an installed PWA) records the raw touch
-// sequence for BOTH pills so we can see EXACTLY where the chain breaks:
-//   TS   = touchstart landed on the pill; efp = elementFromPoint at the pill's center,
-//          onPill=false means something is overlaying the pill and stealing the touch.
-//   TE   = touchend on the pill.
-//   CLICK= a click actually fired and bubbled to document (synthesis succeeded).
-//   →     = the real app handler ran (grid main-handler / viewer onclick-handler).
-// Reading the trace on iOS:
-//   TS + onPill:false            -> an invisible element is on top of the pill.
-//   TS + TE but no CLICK         -> touch never synthesized a click (preventDefault / quirk).
-//   CLICK but no →               -> click fired but never reached the app handler.
-//   TS + TE + CLICK + →          -> pill logic ran; bug is downstream (composite/render).
-(function(){
-  let box; const lines = [];
-  function ensureBox(){
-    if(box && document.body.contains(box)) return box;
-    box = document.createElement('div');
-    box.id = 'tsDbg';
-    box.style.cssText =
-      'position:fixed;top:env(safe-area-inset-top,0px);left:0;right:0;z-index:99999;' +
-      'font:11px/1.35 ui-monospace,Menlo,monospace;color:#5f5;background:rgba(0,0,0,.78);' +
-      'padding:6px 8px;white-space:pre-wrap;pointer-events:none;max-height:46vh;overflow:hidden';
-    document.body.appendChild(box);
-    return box;
-  }
-  window.tslog = function(msg){
-    lines.unshift(msg);
-    if(lines.length > 12) lines.pop();
-    ensureBox().textContent = 'TeeSort v14.24 pill-diag (pointer-events:none)\n' + lines.join('\n');
-  };
-  function desc(el){
-    if(!el) return 'null';
-    let s = el.tagName ? el.tagName.toLowerCase() : String(el);
-    if(el.id) s += '#' + el.id;
-    if(el.className && typeof el.className === 'string'){
-      const c = el.className.trim().split(/\s+/).filter(Boolean).join('.');
-      if(c) s += '.' + c;
-    }
-    return s;
-  }
-  const PILL_SEL = '.card-size-pill, .viewer-size-pill';
-  function pillOf(t){ return (t && t.closest) ? t.closest(PILL_SEL) : null; }
-  function kindOf(pill){ return pill.classList.contains('viewer-size-pill') ? 'VIEW' : 'GRID'; }
-
-  document.addEventListener('touchstart', function(e){
-    const t = e.touches && e.touches[0] ? e.touches[0].target : e.target;
-    const pill = pillOf(e.target);
-    if(!pill) return;
-    const r = pill.getBoundingClientRect();
-    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-    const efp = document.elementFromPoint(cx, cy);
-    const onPill = !!(efp && efp.closest && efp.closest(PILL_SEL));
-    tslog('TS ' + kindOf(pill) + ' tgt=' + desc(e.target));
-    tslog('   efp=' + desc(efp) + ' onPill=' + onPill);
-  }, {passive:true, capture:true});
-
-  document.addEventListener('touchend', function(e){
-    const pill = pillOf(e.target);
-    if(pill) tslog('TE ' + kindOf(pill));
-  }, {passive:true, capture:true});
-
-  // Capture phase so we log even though the grid handler calls stopPropagation().
-  document.addEventListener('click', function(e){
-    const pill = pillOf(e.target);
-    if(pill) tslog('CLICK ' + kindOf(pill) + ' ✓ tgt=' + desc(e.target));
-  }, {capture:true});
-})();
 
 </script>
 <!-- v14.4 Share sheet -->
