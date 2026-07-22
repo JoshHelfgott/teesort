@@ -925,9 +925,29 @@ async function composite(d, settings, outputW){
   const vOff = (d.vOffsetOverride || 0) / 1000;
   const drawY = zone.topY * H - vOff * H;
 
-  // Realistic: 93% alpha lets fabric show through, prevents glow
+  // v14.26: DTG print realism. Instead of laying the graphic flat (which reads "digital"),
+  // bleed the shirt's own fabric — weave, wrinkles, folds, shading — INTO the ink so the
+  // print follows the garment instead of floating on top. Built on a scratch layer so the
+  // texture is clipped back to the graphic's exact shape before it hits the shirt.
+  const PRINT_TEXTURE = 0.25; // 0 = flat/digital, higher = more fabric bleed-through (dial to taste)
+  const prC = document.createElement('canvas');
+  prC.width = W; prC.height = H;
+  const prX = prC.getContext('2d');
+  prX.imageSmoothingQuality = 'high';
+  // 1) lay the graphic where it will sit
+  prX.drawImage(gC, bbox.x, bbox.y, bbox.w, bbox.h, drawX, drawY, drawW, drawH);
+  // 2) blend the fabric into the ink (soft-light keeps hue, adds the shirt's luminance/weave)
+  prX.globalCompositeOperation = 'soft-light';
+  prX.globalAlpha = PRINT_TEXTURE;
+  prX.drawImage(shirt, 0, 0, W, H);
+  // 3) clip everything back to the graphic's shape (drop texture that spilled onto transparency)
+  prX.globalAlpha = 1;
+  prX.globalCompositeOperation = 'destination-in';
+  prX.drawImage(gC, bbox.x, bbox.y, bbox.w, bbox.h, drawX, drawY, drawW, drawH);
+  prX.globalCompositeOperation = 'source-over';
+  // 4) drop the textured print onto the shirt (93% alpha lets fabric show through, prevents glow)
   ctx.globalAlpha = 0.93;
-  ctx.drawImage(gC, bbox.x, bbox.y, bbox.w, bbox.h, drawX, drawY, drawW, drawH);
+  ctx.drawImage(prC, 0, 0);
   ctx.globalAlpha = 1.0;
 
   // v14.4 even tighter - as close as reasonable while keeping shoulder-to-hem in frame
@@ -972,7 +992,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.25 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.26 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
