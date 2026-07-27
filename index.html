@@ -428,10 +428,8 @@
     </div>
     <div class="sheet-section">
       <h3>⭐ Finalists (production)</h3>
-      <button class="ghost" id="finExportZipOriginals" style="margin-top:0">Download Finalist ORIGINALS (ZIP)</button>
-      <button class="ghost" id="finExportZipTees">Download Finalist TEE previews (ZIP)</button>
-      <button class="ghost" id="finExportInfo">Finalist file info audit</button>
-      <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:6px;line-height:1.4">Downloads split into numbered ZIPs (Finalists_001.zip, 002...) so iOS can save each. Each ZIP contains a manifest.csv with filenames, dimensions, status.</div>
+      <button class="ghost" id="finExportInfo" style="margin-top:0">Finalist file info audit</button>
+      <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:6px;line-height:1.4">Checks resolution and file size on your starred designs. To download them, use <b>Export</b> below.</div>
 
       <h3 style="margin-top:16px">Update / troubleshoot</h3>
       <button class="ghost" id="forceRefresh" style="margin-top:0" onclick="(function(){try{if('caches' in window){caches.keys().then(function(ns){ns.forEach(function(n){caches.delete(n);});});}if('serviceWorker' in navigator){navigator.serviceWorker.getRegistrations().then(function(rs){rs.forEach(function(r){r.unregister();});});}}catch(e){}var u=new URL(window.location.href);u.searchParams.set('v',Date.now());window.location.replace(u.toString());})()">Force reload app (bust cache)</button>
@@ -441,10 +439,10 @@
       <button class="ghost" id="clearShirtOverrides">Clear per-card shirt overrides</button>
       <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:6px;line-height:1.4">Clear overrides so the global Size / Shirt Color settings actually apply to all cards.</div>
 
-      <h3 style="margin-top:16px">Export bundle (graphics + mockups, paired)</h3>
-      <button class="ghost" id="expBundleFinalists" style="margin-top:0">⭐ Export all FINALISTS</button>
-      <button class="ghost" id="expBundleKeeps">✓ Export all KEEPS</button>
-      <button class="ghost" id="expBundleView">Export what I'm looking at now</button>
+      <h3 style="margin-top:16px">⬇ Export</h3>
+      <button class="ghost" id="expBundleKeeps" style="margin-top:0">✓ Everything I green-checked</button>
+      <button class="ghost" id="expBundleFinalists">⭐ Everything I starred</button>
+      <button class="ghost" id="expBundleView">Just what's on screen right now</button>
       <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:6px;line-height:1.4" id="exportViewHint">Each ZIP holds two folders — <b>graphics/</b> (print files) and <b>mockups/</b> (tee previews). A graphic and its mockup share the same number, so you always know which is which.</div>
 
       <h3 style="margin-top:16px">Cleanup &amp; export (Keeps)</h3>
@@ -1054,7 +1052,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.31 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.32 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -2036,9 +2034,9 @@ function openSettings(){
     const b1 = document.getElementById('expBundleFinalists');
     const b2 = document.getElementById('expBundleKeeps');
     const b3 = document.getElementById('expBundleView');
-    if(b1) b1.textContent = `⭐ Export all FINALISTS (${nFin})`;
-    if(b2) b2.textContent = `✓ Export all KEEPS (${nKeep})`;
-    if(b3) b3.textContent = `Export current view — ${viewWhat} (${nView})`;
+    if(b1) b1.textContent = `⭐ Everything I starred (${nFin})`;
+    if(b2) b2.textContent = `✓ Everything I green-checked (${nKeep})`;
+    if(b3) b3.textContent = `Just what's on screen — ${viewWhat} (${nView})`;
   } catch(e){}
   $('settingsBg').classList.add('open');
   $('settingsSheet').classList.add('open');
