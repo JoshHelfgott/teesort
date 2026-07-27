@@ -427,10 +427,11 @@
       <button class="ghost" id="clearShirtOverrides">Clear per-card shirt overrides</button>
       <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:6px;line-height:1.4">Clear overrides so the global Size / Shirt Color settings actually apply to all cards.</div>
 
-      <h3 style="margin-top:16px">Export what I'm looking at</h3>
-      <button class="ghost" id="exportViewOriginals" style="margin-top:0">Download THIS VIEW — ORIGINALS (ZIP)</button>
-      <button class="ghost" id="exportViewTees">Download THIS VIEW — TEE previews (ZIP)</button>
-      <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:6px;line-height:1.4" id="exportViewHint">Exports every design currently shown by your filter/search — no 10-item limit. Set the filter (Keep, ⭐, a search) first, then tap.</div>
+      <h3 style="margin-top:16px">Export bundle (graphics + mockups, paired)</h3>
+      <button class="ghost" id="expBundleFinalists" style="margin-top:0">⭐ Export all FINALISTS</button>
+      <button class="ghost" id="expBundleKeeps">✓ Export all KEEPS</button>
+      <button class="ghost" id="expBundleView">Export what I'm looking at now</button>
+      <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:6px;line-height:1.4" id="exportViewHint">Each ZIP holds two folders — <b>graphics/</b> (print files) and <b>mockups/</b> (tee previews). A graphic and its mockup share the same number, so you always know which is which.</div>
 
       <h3 style="margin-top:16px">Cleanup &amp; export (Keeps)</h3>
       <button class="ghost" id="archiveRejected" style="margin-top:0">Archive all rejected designs</button>
@@ -1039,7 +1040,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.29 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.30 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -2008,15 +2009,22 @@ function openSettings(){
   document.querySelectorAll('#segSize button').forEach(b => b.classList.toggle('on', b.dataset.v === state.settings.size));
   $('knockout').value = state.settings.knockout;
   updateKnockLabel();
-  // v14.29: tell the user exactly how many the "this view" export will grab
-  const vh = document.getElementById('exportViewHint');
-  if(vh){
-    let n = 0;
-    try { n = getFiltered().length; } catch(e){}
+  // v14.30: label each export button with exactly what it will grab, so there's no
+  // guessing which set you're about to download.
+  try {
+    const nFin = state.designs.filter(d => d.finalist).length;
+    const nKeep = state.designs.filter(d => d.status === 'round1').length;
+    const nView = getFiltered().length;
     const q = (state.search || '').trim();
-    const where = q ? `matching “${q}”` : 'in the current filter';
-    vh.textContent = `Will export all ${n} design${n === 1 ? '' : 's'} ${where} — no 10-item limit. Splits into numbered ZIPs so iOS can save each.`;
-  }
+    const viewWhat = q ? `“${q}”` : ({all:'All', inbox:'New', round1:'Keeps', needs_fixing:'Fix',
+                                      rejected:'Rejected', archived:'Archived'}[state.filter] || 'View');
+    const b1 = document.getElementById('expBundleFinalists');
+    const b2 = document.getElementById('expBundleKeeps');
+    const b3 = document.getElementById('expBundleView');
+    if(b1) b1.textContent = `⭐ Export all FINALISTS (${nFin})`;
+    if(b2) b2.textContent = `✓ Export all KEEPS (${nKeep})`;
+    if(b3) b3.textContent = `Export current view — ${viewWhat} (${nView})`;
+  } catch(e){}
   $('settingsBg').classList.add('open');
   $('settingsSheet').classList.add('open');
 }
@@ -3115,17 +3123,94 @@ async function showFinalistAudit(){
 const _el2=document.getElementById('finExportZipOriginals'); if(_el2) _el2.onclick = () => exportFinalistZip('original');
 const _el3=document.getElementById('finExportZipTees'); if(_el3) _el3.onclick = () => exportFinalistZip('tee');
 const _el4=document.getElementById('finExportInfo'); if(_el4) _el4.onclick = showFinalistAudit;
-// v14.29: export exactly what the current filter/search is showing (any size, no cap)
+// v14.30: bundle export — graphics AND their tee mockups in ONE zip, in separate
+// folders, with a shared number so each pair is unmistakable:
+//   graphics/0001__pepsi_world_cup.png
+//   mockups/0001__pepsi_world_cup__MOCKUP.jpg
+// manifest.csv lists every pair on one row, so a human (or an AI reading the folder)
+// can always tell which mockup belongs to which print file.
 function _viewExportLabel(){
   const q = (state.search || '').trim();
   if(q) return 'Search_' + _sanitizeName(q).slice(0, 24);
   const map = {all:'All', inbox:'New', round1:'Keeps', needs_fixing:'Fix', rejected:'Rejected', archived:'Archived'};
   return map[state.filter] || 'View';
 }
-const _el4a=document.getElementById('exportViewOriginals');
-if(_el4a) _el4a.onclick = () => exportFinalistZip('original', getFiltered(), _viewExportLabel());
-const _el4b=document.getElementById('exportViewTees');
-if(_el4b) _el4b.onclick = () => exportFinalistZip('tee', getFiltered(), _viewExportLabel());
+function _bundleScope(scope){
+  if(scope === 'finalists') return {list: state.designs.filter(d => d.finalist), label: 'Finalists'};
+  if(scope === 'keeps')     return {list: state.designs.filter(d => d.status === 'round1'), label: 'Keeps'};
+  return {list: getFiltered(), label: _viewExportLabel()};
+}
+function _bundleManifest(pairs){
+  const header = ['pair_id','graphic_file','mockup_file','design_name','status','finalist',
+                  'shirt_color','side','print_size','notes','created_at'];
+  const rows = [header.join(',')];
+  for(const p of pairs){
+    rows.push([
+      p.pid,
+      p.graphicName || '(missing)',
+      p.mockupName || '(missing)',
+      p.d.name || '',
+      p.d.status || '',
+      p.d.finalist ? 'yes' : 'no',
+      resolvedShirt(p.d, state.settings),
+      p.d.side || 'front',
+      resolvedSize(p.d, state.settings),
+      p.d.notes || '',
+      p.d.createdAt ? new Date(p.d.createdAt).toISOString() : ''
+    ].map(_csvEscape).join(','));
+  }
+  return rows.join('\n');
+}
+async function exportBundle(scope){
+  const {list, label} = _bundleScope(scope);
+  if(!list.length){ showToast('Nothing to export in ' + label + '.'); return; }
+  closeSettings();
+  _showZipProgress(`Preparing ${list.length} design${list.length===1?'':'s'}...`, 0);
+  const pairs = [];
+  for(let i = 0; i < list.length; i++){
+    const d = list[i];
+    const pid = String(i + 1).padStart(4, '0');
+    const safe = _sanitizeName((d.name || d.id).replace(/\.(jpg|jpeg|png|webp|heic)$/i, ''));
+    const p = {pid, d, files: []};
+    _showZipProgress(`Rendering ${i+1}/${list.length}...`, (i / list.length) * 60);
+    if(d.blob){
+      const ext = ((d.blob.type||'image/png').split('/')[1] || 'png').replace('jpeg','jpg');
+      p.graphicName = `${pid}__${safe}.${ext}`;
+      p.files.push({filename: `graphics/${p.graphicName}`, blob: d.blob});
+    }
+    try {
+      const dataUrl = await composite(d, state.settings, 1200);
+      const blob = await (await fetch(dataUrl)).blob();
+      p.mockupName = `${pid}__${safe}__MOCKUP.jpg`;
+      p.files.push({filename: `mockups/${p.mockupName}`, blob});
+    } catch(e){ /* keep the graphic even if the mockup fails */ }
+    if(p.files.length) pairs.push(p);
+  }
+  if(!pairs.length){ _hideZipProgress(); showToast('Nothing to export (no stored files)'); return; }
+  // Chunk by pair so a graphic and its mockup never land in different ZIPs.
+  const chunks = []; let cur = [], curBytes = 0;
+  for(const p of pairs){
+    const sz = p.files.reduce((a, f) => a + (f.blob.size || 0), 0);
+    if(cur.length && curBytes + sz > ZIP_TARGET_BYTES){ chunks.push(cur); cur = []; curBytes = 0; }
+    cur.push(p); curBytes += sz;
+  }
+  if(cur.length) chunks.push(cur);
+  const stamp = new Date().toISOString().slice(0,10).replace(/-/g,'');
+  for(let ci = 0; ci < chunks.length; ci++){
+    const items = chunks[ci].flatMap(p => p.files);
+    const blob = await _zipItems(items, _bundleManifest(chunks[ci]),
+      frac => _showZipProgress(`Zipping ${ci+1}/${chunks.length}... ${Math.round(frac*100)}%`, 60 + ((ci + frac) / chunks.length) * 35));
+    const fname = `${label}_BUNDLE_${stamp}_${String(ci+1).padStart(3,'0')}.zip`;
+    _showZipProgress(`Saving ${fname}...`, 96);
+    const ok = await _saveBlob(blob, fname);
+    if(!ok){ _hideZipProgress(); showToast(`Canceled at ZIP ${ci+1}/${chunks.length}`); return; }
+  }
+  _hideZipProgress();
+  showToast(`Exported ${pairs.length} design${pairs.length===1?'':'s'} (graphics + mockups)`);
+}
+const _elB1=document.getElementById('expBundleFinalists'); if(_elB1) _elB1.onclick = () => exportBundle('finalists');
+const _elB2=document.getElementById('expBundleKeeps');     if(_elB2) _elB2.onclick = () => exportBundle('keeps');
+const _elB3=document.getElementById('expBundleView');      if(_elB3) _elB3.onclick = () => exportBundle('view');
 
 // Rebuild previews button
 // Force reload handled by inline onclick on the button (bulletproof against script errors)
