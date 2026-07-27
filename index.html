@@ -427,6 +427,11 @@
       <button class="ghost" id="clearShirtOverrides">Clear per-card shirt overrides</button>
       <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:6px;line-height:1.4">Clear overrides so the global Size / Shirt Color settings actually apply to all cards.</div>
 
+      <h3 style="margin-top:16px">Export what I'm looking at</h3>
+      <button class="ghost" id="exportViewOriginals" style="margin-top:0">Download THIS VIEW — ORIGINALS (ZIP)</button>
+      <button class="ghost" id="exportViewTees">Download THIS VIEW — TEE previews (ZIP)</button>
+      <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:6px;line-height:1.4" id="exportViewHint">Exports every design currently shown by your filter/search — no 10-item limit. Set the filter (Keep, ⭐, a search) first, then tap.</div>
+
       <h3 style="margin-top:16px">Cleanup &amp; export (Keeps)</h3>
       <button class="ghost" id="archiveRejected" style="margin-top:0">Archive all rejected designs</button>
       <button class="ghost" id="exportKeeps">Export Keeps (originals, share sheet)</button>
@@ -1034,7 +1039,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.28 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.29 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -2003,6 +2008,15 @@ function openSettings(){
   document.querySelectorAll('#segSize button').forEach(b => b.classList.toggle('on', b.dataset.v === state.settings.size));
   $('knockout').value = state.settings.knockout;
   updateKnockLabel();
+  // v14.29: tell the user exactly how many the "this view" export will grab
+  const vh = document.getElementById('exportViewHint');
+  if(vh){
+    let n = 0;
+    try { n = getFiltered().length; } catch(e){}
+    const q = (state.search || '').trim();
+    const where = q ? `matching “${q}”` : 'in the current filter';
+    vh.textContent = `Will export all ${n} design${n === 1 ? '' : 's'} ${where} — no 10-item limit. Splits into numbered ZIPs so iOS can save each.`;
+  }
   $('settingsBg').classList.add('open');
   $('settingsSheet').classList.add('open');
 }
@@ -2926,10 +2940,93 @@ async function _saveBlob(blob, filename){
   return true;
 }
 const ZIP_TARGET_BYTES = 180 * 1024 * 1024; // ~180MB per ZIP
-async function exportFinalistZip(kind){
-  const finalists = state.designs.filter(d => d.finalist);
-  if(!finalists.length){ showToast('No finalists yet. Tap the \u2b50 on cards to mark them.'); return; }
-  if(typeof JSZip === 'undefined'){ showToast('ZIP library still loading, try again'); return; }
+
+// v14.29 FIX: JSZip was referenced but never actually loaded — both "Download
+// Finalist ZIP" buttons silently failed with "ZIP library still loading" forever,
+// which is why exports fell back to the 10-at-a-time share sheet. Rather than pull a
+// CDN script (which would break the offline PWA), write the ZIP ourselves: STORE
+// (no compression) is a simple, fully-specified format and our payload is JPEG/PNG,
+// already compressed — deflating it again would buy nothing.
+const _crcTable = (() => {
+  const t = new Uint32Array(256);
+  for(let n = 0; n < 256; n++){
+    let c = n;
+    for(let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function _crc32(u8){
+  let c = 0xFFFFFFFF;
+  for(let i = 0; i < u8.length; i++) c = _crcTable[(c ^ u8[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+// entries: [{name, u8}] -> Blob (ZIP, STORE method)
+function _makeZipBlob(entries){
+  const enc = new TextEncoder();
+  const chunks = [], central = [];
+  let offset = 0;
+  for(const e of entries){
+    const nameBytes = enc.encode(e.name);
+    const crc = _crc32(e.u8), size = e.u8.length;
+    const lf = new DataView(new ArrayBuffer(30));
+    lf.setUint32(0, 0x04034b50, true);   // local file header signature
+    lf.setUint16(4, 20, true);           // version needed
+    lf.setUint16(6, 0x0800, true);       // UTF-8 filename flag
+    lf.setUint16(8, 0, true);            // method: 0 = STORE
+    lf.setUint16(10, 0, true); lf.setUint16(12, 0, true); // time/date
+    lf.setUint32(14, crc, true);
+    lf.setUint32(18, size, true);        // compressed size
+    lf.setUint32(22, size, true);        // uncompressed size
+    lf.setUint16(26, nameBytes.length, true);
+    lf.setUint16(28, 0, true);           // extra len
+    chunks.push(new Uint8Array(lf.buffer), nameBytes, e.u8);
+    central.push({nameBytes, crc, size, offset});
+    offset += 30 + nameBytes.length + size;
+  }
+  const cdStart = offset;
+  for(const c of central){
+    const cd = new DataView(new ArrayBuffer(46));
+    cd.setUint32(0, 0x02014b50, true);   // central directory signature
+    cd.setUint16(4, 20, true); cd.setUint16(6, 20, true);
+    cd.setUint16(8, 0x0800, true); cd.setUint16(10, 0, true);
+    cd.setUint16(12, 0, true); cd.setUint16(14, 0, true);
+    cd.setUint32(16, c.crc, true);
+    cd.setUint32(20, c.size, true); cd.setUint32(24, c.size, true);
+    cd.setUint16(28, c.nameBytes.length, true);
+    cd.setUint16(30, 0, true); cd.setUint16(32, 0, true);
+    cd.setUint16(34, 0, true); cd.setUint16(36, 0, true);
+    cd.setUint32(38, 0, true);
+    cd.setUint32(42, c.offset, true);
+    chunks.push(new Uint8Array(cd.buffer), c.nameBytes);
+    offset += 46 + c.nameBytes.length;
+  }
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true);    // end of central directory
+  end.setUint16(8, central.length, true);
+  end.setUint16(10, central.length, true);
+  end.setUint32(12, offset - cdStart, true);
+  end.setUint32(16, cdStart, true);
+  chunks.push(new Uint8Array(end.buffer));
+  return new Blob(chunks, {type:'application/zip'});
+}
+async function _zipItems(items, manifestCsv, onProgress){
+  const entries = [];
+  for(let i = 0; i < items.length; i++){
+    const it = items[i];
+    entries.push({name: it.filename, u8: new Uint8Array(await it.blob.arrayBuffer())});
+    if(onProgress) onProgress((i + 1) / items.length);
+  }
+  if(manifestCsv) entries.push({name:'manifest.csv', u8: new TextEncoder().encode(manifestCsv)});
+  return _makeZipBlob(entries);
+}
+// v14.29: export ANY set, not just finalists. `list` defaults to finalists so the
+// existing two buttons keep working; the new "Export this view" passes getFiltered()
+// so whatever the search/filter is showing gets zipped \u2014 no 10-item cap, splits into
+// numbered ZIPs sized for iOS just like the finalist export.
+async function exportFinalistZip(kind, list, labelBase){
+  const finalists = list || state.designs.filter(d => d.finalist);
+  if(!finalists.length){ showToast(list ? 'Nothing in this view to export.' : 'No finalists yet. Tap the \u2b50 on cards to mark them.'); return; }
   closeSettings();
   _showZipProgress(`Preparing ${kind === 'tee' ? 'tee previews' : 'originals'}...`, 0);
   const items = [];
@@ -2963,14 +3060,12 @@ async function exportFinalistZip(kind){
   }
   if(current.length) chunks.push(current);
   const stamp = new Date().toISOString().slice(0,10).replace(/-/g,'');
-  const base = kind === 'tee' ? `Finalists_TEES_${stamp}` : `Finalists_${stamp}`;
+  const nameRoot = labelBase || 'Finalists';
+  const base = kind === 'tee' ? `${nameRoot}_TEES_${stamp}` : `${nameRoot}_${stamp}`;
   for(let ci = 0; ci < chunks.length; ci++){
     _showZipProgress(`Zipping ${ci+1}/${chunks.length}...`, 50 + ((ci+0.1) / chunks.length) * 40);
-    const zip = new JSZip();
-    for(const it of chunks[ci]) zip.file(it.filename, it.blob);
-    zip.file('manifest.csv', _buildManifest(chunks[ci]));
-    const blob = await zip.generateAsync({type:'blob', compression:'DEFLATE', compressionOptions:{level:1}},
-      m => { _showZipProgress(`Zipping ${ci+1}/${chunks.length}... ${Math.round(m.percent)}%`, 50 + ((ci + m.percent/100) / chunks.length) * 40); });
+    const blob = await _zipItems(chunks[ci], _buildManifest(chunks[ci]),
+      frac => { _showZipProgress(`Zipping ${ci+1}/${chunks.length}... ${Math.round(frac*100)}%`, 50 + ((ci + frac) / chunks.length) * 40); });
     const num = String(ci+1).padStart(3,'0');
     const fname = `${base}_${num}.zip`;
     _showZipProgress(`Saving ${fname}...`, 92);
@@ -3020,6 +3115,17 @@ async function showFinalistAudit(){
 const _el2=document.getElementById('finExportZipOriginals'); if(_el2) _el2.onclick = () => exportFinalistZip('original');
 const _el3=document.getElementById('finExportZipTees'); if(_el3) _el3.onclick = () => exportFinalistZip('tee');
 const _el4=document.getElementById('finExportInfo'); if(_el4) _el4.onclick = showFinalistAudit;
+// v14.29: export exactly what the current filter/search is showing (any size, no cap)
+function _viewExportLabel(){
+  const q = (state.search || '').trim();
+  if(q) return 'Search_' + _sanitizeName(q).slice(0, 24);
+  const map = {all:'All', inbox:'New', round1:'Keeps', needs_fixing:'Fix', rejected:'Rejected', archived:'Archived'};
+  return map[state.filter] || 'View';
+}
+const _el4a=document.getElementById('exportViewOriginals');
+if(_el4a) _el4a.onclick = () => exportFinalistZip('original', getFiltered(), _viewExportLabel());
+const _el4b=document.getElementById('exportViewTees');
+if(_el4b) _el4b.onclick = () => exportFinalistZip('tee', getFiltered(), _viewExportLabel());
 
 // Rebuild previews button
 // Force reload handled by inline onclick on the button (bulletproof against script errors)
