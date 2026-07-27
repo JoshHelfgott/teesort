@@ -33,6 +33,13 @@
   .icon-btn{width:34px;height:34px;border-radius:999px;background:rgba(255,255,255,.06);display:grid;place-items:center;transition:transform .08s}
   .icon-btn:active{transform:scale(.92);background:rgba(255,255,255,.12)}
   .icon-btn svg{width:16px;height:16px}
+  /* v14.31: label the top-bar icons — abstract glyphs alone weren't readable */
+  .top-actions .icon-btn{width:auto;min-width:44px;height:auto;border-radius:11px;
+    display:flex;flex-direction:column;align-items:center;gap:2px;padding:5px 6px 4px}
+  .top-actions .icon-btn svg{width:17px;height:17px}
+  .ib-label{font-size:8.5px;font-weight:600;letter-spacing:.01em;color:rgba(255,255,255,.55);line-height:1;white-space:nowrap}
+  .top-actions .icon-btn.active{background:#fff;color:#000}
+  .top-actions .icon-btn.active .ib-label{color:#000}
   .primary-btn{height:34px;padding:0 13px;border-radius:999px;background:#fff;color:#000;font-size:13px;font-weight:600;display:inline-flex;align-items:center;gap:6px;transition:transform .08s}
   .primary-btn:active{transform:scale(.96)}
   .primary-btn svg{width:14px;height:14px}
@@ -51,8 +58,15 @@
   .fo-head{display:flex;align-items:center;justify-content:space-between;padding:max(env(safe-area-inset-top),12px) 14px 8px;gap:10px}
   .fo-title{font-size:14px;font-weight:700;color:#fff}
   .fo-sub{font-size:11px;color:rgba(255,255,255,.5);margin-top:2px}
-  .fo-x{width:34px;height:34px;border-radius:10px;background:rgba(255,255,255,.1);color:#fff;display:flex;align-items:center;justify-content:center;flex:0 0 auto;border:0}
-  .fo-x svg{width:18px;height:18px}
+  .fo-x{height:34px;padding:0 14px;border-radius:10px;background:rgba(255,255,255,.16);color:#fff;
+    display:flex;align-items:center;gap:6px;flex:0 0 auto;border:1px solid rgba(255,255,255,.2);
+    font-size:13px;font-weight:700;font-family:inherit}
+  .fo-x svg{width:15px;height:15px}
+  .fo-undo{height:34px;padding:0 12px;border-radius:10px;background:rgba(255,255,255,.08);
+    color:rgba(255,255,255,.8);border:1px solid rgba(255,255,255,.12);font-size:12.5px;
+    font-weight:600;font-family:inherit;flex:0 0 auto}
+  .fo-undo[disabled]{opacity:.3}
+  .fo-headbtns{display:flex;gap:7px;align-items:center;flex:0 0 auto}
   .fo-body{flex:1;display:flex;flex-direction:column;gap:8px;padding:0 12px 12px;min-height:0}
   .fo-panel{flex:1;position:relative;border-radius:14px;overflow:hidden;background:#161618;display:flex;align-items:center;justify-content:center;min-height:0}
   .fo-panel img{max-width:100%;max-height:100%;object-fit:contain;display:block}
@@ -332,14 +346,14 @@
       </div>
       <div class="top-actions">
         <button class="icon-btn" id="compareBtn" aria-label="Compare mode">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="7" height="16" rx="1"/><rect x="14" y="4" width="7" height="16" rx="1"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="7" height="16" rx="1"/><rect x="14" y="4" width="7" height="16" rx="1"/></svg><span class="ib-label">Compare</span>
         </button>
         <button class="icon-btn" id="faceoffBtn" aria-label="Face-off — knock the current view down to one champion">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4v3a2 2 0 0 0 2 2h3M6 20v-3a2 2 0 0 1 2-2h3M11 12h6M18 9l3 3-3 3"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4v3a2 2 0 0 0 2 2h3M6 20v-3a2 2 0 0 1 2-2h3M11 12h6M18 9l3 3-3 3"/></svg><span class="ib-label">Face-off</span>
         </button>
-        <button class="icon-btn" id="viewToggleBtn" aria-label="Toggle view"></button>
+        <button class="icon-btn" id="viewToggleBtn" aria-label="Grid size"><span class="ib-label">Grid</span></button>
         <button class="icon-btn" id="settingsBtn" aria-label="Settings">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg><span class="ib-label">Settings</span>
         </button>
         <button class="primary-btn" id="importBtn">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-7"/><path d="M16 6l-4-4-4 4"/><path d="M12 2v13"/></svg>
@@ -1040,7 +1054,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.30 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.31 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -1989,7 +2003,8 @@ function setViewIcon(){
     2: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>`,
     3: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="5" height="5" rx="0.5"/><rect x="9.5" y="3" width="5" height="5" rx="0.5"/><rect x="16" y="3" width="5" height="5" rx="0.5"/><rect x="3" y="9.5" width="5" height="5" rx="0.5"/><rect x="9.5" y="9.5" width="5" height="5" rx="0.5"/><rect x="16" y="9.5" width="5" height="5" rx="0.5"/><rect x="3" y="16" width="5" height="5" rx="0.5"/><rect x="9.5" y="16" width="5" height="5" rx="0.5"/><rect x="16" y="16" width="5" height="5" rx="0.5"/></svg>`
   };
-  btn.innerHTML = svgs[state.gridCols] || svgs[3];
+  // keep the text label — this button rewrites its own icon on every toggle
+  btn.innerHTML = (svgs[state.gridCols] || svgs[3]) + '<span class="ib-label">Grid</span>';
 }
 $('viewToggleBtn').onclick = () => {
   // 3 -> 2 -> 1 -> 3
@@ -2336,12 +2351,26 @@ function foEl(){
   o.innerHTML =
     '<div class="fo-head"><div><div class="fo-title" id="foTitle">Face-off</div>' +
     '<div class="fo-sub" id="foSub"></div></div>' +
-    '<button class="fo-x" id="foClose" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg></button></div>' +
+    '<div class="fo-headbtns">' +
+    '<button class="fo-undo" id="foUndo" disabled>↩ Undo</button>' +
+    '<button class="fo-x" id="foClose" aria-label="Exit face-off">' +
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>Exit</button>' +
+    '</div></div>' +
     '<div class="fo-body" id="foBody"></div>';
   document.body.appendChild(o);
   const x = document.getElementById('foClose');
   if(x) x.addEventListener('click', closeFaceoff);
+  const u = document.getElementById('foUndo');
+  if(u) u.addEventListener('click', foUndo);
   return o;
+}
+// Step back one pick — restores the previous pairing so a mis-tap isn't final.
+function foUndo(){
+  const f = faceoff; if(!f || !f.history || !f.history.length) return;
+  const prev = f.history.pop();
+  f.pool = prev.pool.slice(); f.pending = prev.pending.slice(); f.losers = prev.losers.slice();
+  f.round = prev.round; f.a = prev.a; f.b = prev.b;
+  foRenderPair();
 }
 function startFaceoff(){
   const contenders = getFiltered().filter(d => d && d.blob).map(d => d.id);
@@ -2349,7 +2378,7 @@ function startFaceoff(){
   // Light shuffle so seeding isn't biased by grid order.
   const pool = contenders.slice();
   for(let i = pool.length - 1; i > 0; i--){ const j = Math.floor(Math.random() * (i + 1)); const t = pool[i]; pool[i] = pool[j]; pool[j] = t; }
-  faceoff = { pool, pending: [], losers: [], round: 1, initial: contenders.length, a: null, b: null };
+  faceoff = { pool, pending: [], losers: [], round: 1, initial: contenders.length, a: null, b: null, history: [] };
   foEl().classList.add('open');
   foNext();
 }
@@ -2381,6 +2410,8 @@ function foRenderPair(){
   body.innerHTML = foPanelHtml(f.a, 'a') + '<div class="fo-vs">VS</div>' + foPanelHtml(f.b, 'b');
   foLoadPanel(f.a, 'a'); foLoadPanel(f.b, 'b');
   body.querySelectorAll('.fo-pick').forEach(btn => btn.addEventListener('click', () => foPick(btn.dataset.id)));
+  const u = document.getElementById('foUndo');
+  if(u) u.disabled = !(f.history && f.history.length);
 }
 async function foLoadPanel(id, slot){
   const d = state.designs.find(x => x.id === id);
@@ -2397,6 +2428,10 @@ async function foLoadPanel(id, slot){
 }
 function foPick(winnerId){
   const f = faceoff; if(!f) return;
+  // snapshot so Undo can step back one pick
+  f.history.push({pool: f.pool.slice(), pending: f.pending.slice(), losers: f.losers.slice(),
+                  round: f.round, a: f.a, b: f.b});
+  if(f.history.length > 50) f.history.shift();
   const loser = (winnerId === f.a) ? f.b : f.a;
   f.pending.push(winnerId); f.losers.push(loser);
   if(navigator.vibrate) navigator.vibrate(8);
