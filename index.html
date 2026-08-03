@@ -24,23 +24,27 @@
 
   header{position:sticky;top:0;z-index:30;background:rgba(10,10,11,.85);backdrop-filter:saturate(180%) blur(20px);-webkit-backdrop-filter:saturate(180%) blur(20px);border-bottom:1px solid rgba(255,255,255,.06)}
   .topbar{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px}
-  .brand{display:flex;align-items:center;gap:8px;min-width:0}
+  .brand{display:flex;align-items:center;gap:8px;min-width:0;flex:0 1 auto}
   .brand-mark{width:26px;height:26px;border-radius:8px;background:#fff;color:#000;display:grid;place-items:center;flex:0 0 auto}
   .brand-mark svg{width:14px;height:14px}
-  .brand-name{font-weight:700;font-size:15px;letter-spacing:-.01em}
-  .brand-sub{font-size:11px;color:rgba(255,255,255,.5);font-variant-numeric:tabular-nums;margin-top:1px}
-  .top-actions{display:flex;align-items:center;gap:6px;flex:0 0 auto}
+  .brand-name{font-weight:700;font-size:15px;letter-spacing:-.01em;white-space:nowrap}
+  /* v14.33: on phone widths the labelled action row needs the space — the mark plus
+     the meta line below already identify the app, so drop the wordmark. */
+  @media (max-width:460px){ .brand-name{display:none} }
+  .brand-sub{font-size:11px;color:rgba(255,255,255,.5);font-variant-numeric:tabular-nums;
+    padding:0 12px 5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .top-actions{display:flex;align-items:center;gap:4px;flex:0 0 auto}
   .icon-btn{width:34px;height:34px;border-radius:999px;background:rgba(255,255,255,.06);display:grid;place-items:center;transition:transform .08s}
   .icon-btn:active{transform:scale(.92);background:rgba(255,255,255,.12)}
   .icon-btn svg{width:16px;height:16px}
   /* v14.31: label the top-bar icons — abstract glyphs alone weren't readable */
-  .top-actions .icon-btn{width:auto;min-width:44px;height:auto;border-radius:11px;
-    display:flex;flex-direction:column;align-items:center;gap:2px;padding:5px 6px 4px}
+  .top-actions .icon-btn{width:auto;min-width:40px;height:auto;border-radius:10px;
+    display:flex;flex-direction:column;align-items:center;gap:2px;padding:4px 5px 3px}
   .top-actions .icon-btn svg{width:17px;height:17px}
-  .ib-label{font-size:8.5px;font-weight:600;letter-spacing:.01em;color:rgba(255,255,255,.55);line-height:1;white-space:nowrap}
+  .ib-label{font-size:8px;font-weight:600;letter-spacing:.01em;color:rgba(255,255,255,.55);line-height:1;white-space:nowrap}
   .top-actions .icon-btn.active{background:#fff;color:#000}
   .top-actions .icon-btn.active .ib-label{color:#000}
-  .primary-btn{height:34px;padding:0 13px;border-radius:999px;background:#fff;color:#000;font-size:13px;font-weight:600;display:inline-flex;align-items:center;gap:6px;transition:transform .08s}
+  .primary-btn{height:34px;padding:0 11px;border-radius:999px;background:#fff;color:#000;font-size:13px;font-weight:600;display:inline-flex;align-items:center;gap:6px;transition:transform .08s}
   .primary-btn:active{transform:scale(.96)}
   .primary-btn svg{width:14px;height:14px}
 
@@ -341,7 +345,6 @@
         </div>
         <div style="min-width:0">
           <div class="brand-name">TeeSort</div>
-          <div class="brand-sub" id="ctxText">Auto \u00b7 0 designs</div>
         </div>
       </div>
       <div class="top-actions">
@@ -361,6 +364,7 @@
         </button>
       </div>
     </div>
+    <div class="brand-sub" id="ctxText">Auto \u00b7 0 designs</div>
     <div class="filters" id="filters"></div>
     <div class="libbar">
       <input class="libsearch" id="libSearch" type="search" inputmode="search" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Search name or notes…">
@@ -1052,7 +1056,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.32 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.33 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
