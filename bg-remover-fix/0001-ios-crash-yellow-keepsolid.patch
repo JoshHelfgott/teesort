@@ -1,0 +1,346 @@
+From 53c49372d95ba02fca3c712d14e53a18732f6c6d Mon Sep 17 00:00:00 2001
+From: Josh Helfgott <joshhelfgott@gmail.com>
+Date: Mon, 5 Oct 2026 00:42:55 +0000
+Subject: [PATCH] Fix iPhone crashes mid-batch, drop always-on dot markers,
+ remove Keep Solid
+
+- Free full-size canvases as soon as they're used (iOS caps total canvas
+  memory; leftovers made new canvases blank or killed the tab)
+- Export preview reuses one canvas per image instead of rebuilding ~100 MB
+  on every redraw
+- Cap imported images at 6300 px on the long side (largest platen)
+- Dot survey markers only drawn while Dot Cleanup is above 0, red only
+- Color to Alpha: Keep Solid slider removed (fixed at 0 = plain C2A)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01MLLuqCKDDsFmHGhTTXi81j
+---
+ source/src/steps/AlphaStep.tsx  | 20 ++++++-------
+ source/src/steps/CropStep.tsx   | 10 +++++--
+ source/src/steps/ExportStep.tsx | 31 ++++++++++++++++----
+ source/src/steps/ImportStep.tsx |  4 +--
+ source/src/steps/PlatenStep.tsx | 14 +++++++--
+ source/src/utils/imageUtils.ts  | 51 +++++++++++++++++++++++++++++++--
+ 6 files changed, 103 insertions(+), 27 deletions(-)
+
+diff --git a/source/src/steps/AlphaStep.tsx b/source/src/steps/AlphaStep.tsx
+index 5b80793..e830fb5 100644
+--- a/source/src/steps/AlphaStep.tsx
++++ b/source/src/steps/AlphaStep.tsx
+@@ -51,7 +51,9 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
+   const [colorMode, setColorMode] = useState<'solid' | 'c2a' | 'halftone'>('solid');
+   // Color-to-alpha: how much artwork to hold fully solid (higher = less
+   // wash-out). Passed to the engine inverted as the opacity threshold.
+-  const [keepSolid, setKeepSolid] = useState(60);
++  // Keep Solid slider removed — fixed at 0, i.e. plain colour-to-alpha
++  // (alpha follows the ink's real coverage, like GIMP/Photopea).
++  const keepSolid = 0;
+   // Halftone settings. lpi = dot frequency (15-60, lower = bigger dots);
+   // screenAngle = screen rotation; halftoneFade = width of the dotted
+   // transition band between knocked-out background and solid artwork.
+@@ -172,7 +174,7 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
+       if (t === 0) continue;
+       const o = p << 2;
+       if (t === 2) { d[o] = 255; d[o + 1] = 30;  d[o + 2] = 30; d[o + 3] = 210; }
+-      else         { d[o] = 255; d[o + 1] = 190; d[o + 2] = 50; d[o + 3] = 90;  }
++
+     }
+     return { overlay: ov, looseCount, removeCount };
+   }, [speckAnalysis, isolation, isolationMin]);
+@@ -218,7 +220,10 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
+     // Dot survey: faint amber on every loose fragment, bright red on the ones
+     // the slider will erase. Drawn whenever anything is loose — so the user
+     // sees the state of the image without ever touching the slider.
+-    if (dotSurvey.overlay && bgMode !== 'original' && bgMode !== 'mask') {
++    // Only drawn while Dot Cleanup is turned up — at 0 the preview shows
++    // exactly what will export. (The always-on faint amber markers read as a
++    // yellow tint on the artwork that never appeared in the saved file.)
++    if (dotCleanup > 0 && dotSurvey.overlay && bgMode !== 'original' && bgMode !== 'mask') {
+       ctx.drawImage(imageDataToCanvas(dotSurvey.overlay), 0, 0);
+     }
+ 
+@@ -618,15 +623,6 @@ export default function AlphaStep({ state, updateState, goToStep }: Props) {
+           </div>
+         )}
+ 
+-        {colorMode === 'c2a' && (
+-          <div className="flex items-center gap-3">
+-            <label className="text-sm font-semibold w-24 shrink-0">Keep Solid</label>
+-            <input type="range" min="0" max="100" value={keepSolid}
+-              onChange={e => { setKeepSolid(parseInt(e.target.value)); updateState({ alphaUserTuned: true }); }}
+-              className="flex-1 accent-blue-500" />
+-            <span className="font-mono text-blue-400 text-sm w-8 text-right tabular-nums">{keepSolid}</span>
+-          </div>
+-        )}
+ 
+         {colorMode === 'halftone' && (
+           <>
+diff --git a/source/src/steps/CropStep.tsx b/source/src/steps/CropStep.tsx
+index 989a71e..e7997c8 100644
+--- a/source/src/steps/CropStep.tsx
++++ b/source/src/steps/CropStep.tsx
+@@ -1,6 +1,6 @@
+ import { useState, useRef, useEffect, useCallback } from 'react';
+ import { AppState } from '../App';
+-import { imageDataToCanvas, cropImageData, detectBoundingBox } from '../utils/imageUtils';
++import { imageDataToCanvas, cropImageData, detectBoundingBox, releaseCanvas } from '../utils/imageUtils';
+ 
+ type Props = {
+   state: AppState;
+@@ -95,7 +95,13 @@ export default function TrimStep({ state, updateState, goToStep }: Props) {
+     : 1;
+ 
+   useEffect(() => {
+-    if (img) srcCanvasRef.current = imageDataToCanvas(img);
++    if (!img) return;
++    const c = imageDataToCanvas(img);
++    srcCanvasRef.current = c;
++    return () => {
++      releaseCanvas(c);
++      if (srcCanvasRef.current === c) srcCanvasRef.current = null;
++    };
+   }, [img]);
+ 
+   useEffect(() => {
+diff --git a/source/src/steps/ExportStep.tsx b/source/src/steps/ExportStep.tsx
+index 2abdf5b..ed7015b 100644
+--- a/source/src/steps/ExportStep.tsx
++++ b/source/src/steps/ExportStep.tsx
+@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
+ import { Download, Loader } from 'lucide-react';
+ import UPNG from 'upng-js';
+ import { AppState } from '../App';
+-import { imageDataToCanvas, get2dContext } from '../utils/imageUtils';
++import { imageDataToCanvas, get2dContext, releaseCanvas } from '../utils/imageUtils';
+ import { encodeDitheredPNG } from '../utils/ditherQuantize';
+ 
+ const formatBytes = (n: number) =>
+@@ -42,6 +42,20 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
+   // Cached overlay so we don't rebuild the mask ImageData on every redraw
+   // (it only depends on canvasData + prealphaCanvas, not on bg mode).
+   const maskOverlayRef = useRef<{ canvas: HTMLCanvasElement; sig: string } | null>(null);
++  // Full-size canvas of the image being previewed. Built once per image and
++  // reused — this used to be rebuilt (~100 MB on a Jumbo platen) on every
++  // redraw, which is how iPhones ran out of canvas memory mid-batch.
++  const previewSrcRef = useRef<{ data: ImageData; canvas: HTMLCanvasElement } | null>(null);
++  const dropMaskOverlay = () => {
++    releaseCanvas(maskOverlayRef.current?.canvas);
++    maskOverlayRef.current = null;
++  };
++  const dropPreviewSrc = () => {
++    releaseCanvas(previewSrcRef.current?.canvas);
++    previewSrcRef.current = null;
++  };
++  // Free both when leaving the Export screen.
++  useEffect(() => () => { dropMaskOverlay(); dropPreviewSrc(); }, []);
+ 
+   useEffect(() => {
+     if (queuedName) setFilename(queuedName);
+@@ -90,6 +104,7 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
+       }
+     }
+     const canvas = imageDataToCanvas(overlay);
++    releaseCanvas(maskOverlayRef.current?.canvas);
+     maskOverlayRef.current = { canvas, sig };
+     return canvas;
+   }, [state.canvasData, state.prealphaCanvas]);
+@@ -142,8 +157,11 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
+     }
+ 
+     // Image (final by default; original if that mode is active and prealpha exists).
+-    const imgCanvas = imageDataToCanvas(sourceImg);
+-    ctx.drawImage(imgCanvas, 0, 0, cssW, cssH);
++    if (previewSrcRef.current?.data !== sourceImg) {
++      dropPreviewSrc();
++      previewSrcRef.current = { data: sourceImg, canvas: imageDataToCanvas(sourceImg) };
++    }
++    ctx.drawImage(previewSrcRef.current.canvas, 0, 0, cssW, cssH);
+ 
+     // Mask mode: composite red tint over the original showing what got
+     // removed during the alpha step.
+@@ -191,6 +209,7 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
+       const losslessBlob = await new Promise<Blob | null>((res) =>
+         canvas.toBlob(res, 'image/png'),
+       );
++      releaseCanvas(canvas);
+       if (!losslessBlob) {
+         alert('Failed to create image');
+         setExporting(false);
+@@ -295,7 +314,8 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
+     if (!hasMore) return;
+     // Clear the cached overlay so the next image doesn't show the previous
+     // image's mask before the redraw fires.
+-    maskOverlayRef.current = null;
++    dropMaskOverlay();
++    dropPreviewSrc();
+     updateState({
+       currentImageIndex: state.currentImageIndex + 1,
+       currentStep: 1,
+@@ -308,7 +328,8 @@ export default function ExportStep({ state, updateState, goToStep }: Props) {
+   };
+ 
+   const reset = () => {
+-    maskOverlayRef.current = null;
++    dropMaskOverlay();
++    dropPreviewSrc();
+     updateState({
+       currentStep: 1,
+       sourceImage: null,
+diff --git a/source/src/steps/ImportStep.tsx b/source/src/steps/ImportStep.tsx
+index 9c01528..b1540c2 100644
+--- a/source/src/steps/ImportStep.tsx
++++ b/source/src/steps/ImportStep.tsx
+@@ -1,7 +1,7 @@
+ import { useState, useEffect, useRef } from 'react';
+ import { Upload } from 'lucide-react';
+ import { AppState } from '../App';
+-import { loadImageFile, drawImageToCanvas, canvasToImageData, autoTrimEdges } from '../utils/imageUtils';
++import { loadImageFile, imageToImageData, autoTrimEdges } from '../utils/imageUtils';
+ 
+ type Props = {
+   state: AppState;
+@@ -21,7 +21,7 @@ export default function ImportStep({ state, updateState, goToStep }: Props) {
+       const img = await loadImageFile(file);
+       // Strip any thin upscaler/edge residue before it reaches the platen —
+       // a no-op for clean images.
+-      const imageData = autoTrimEdges(canvasToImageData(drawImageToCanvas(img)));
++      const imageData = autoTrimEdges(imageToImageData(img));
+       updateState({
+         sourceImage: imageData,
+         croppedImage: imageData,
+diff --git a/source/src/steps/PlatenStep.tsx b/source/src/steps/PlatenStep.tsx
+index 8d73b83..9e023de 100644
+--- a/source/src/steps/PlatenStep.tsx
++++ b/source/src/steps/PlatenStep.tsx
+@@ -1,6 +1,6 @@
+ import { useState, useRef, useEffect, useCallback } from 'react';
+ import { AppState } from '../App';
+-import { lanczosResize, imageDataToCanvas } from '../utils/imageUtils';
++import { lanczosResize, imageDataToCanvas, releaseCanvas } from '../utils/imageUtils';
+ 
+ const TEMPLATES = [
+   { name: 'NeatoPod DTG Regular', short: 'NeatoPod Reg',   label: '12"×16"', width: 3600, height: 4800 },
+@@ -72,6 +72,10 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
+     c.height = src.height;
+     c.getContext('2d')!.putImageData(src, 0, 0);
+     srcCanvasRef.current = c;
++    return () => {
++      releaseCanvas(c);
++      if (srcCanvasRef.current === c) srcCanvasRef.current = null;
++    };
+   }, [src]);
+ 
+   useEffect(() => {
+@@ -358,13 +362,17 @@ export default function PlatenStep({ state, updateState, goToStep }: Props) {
+         const srcData = sc.getContext('2d')!.getImageData(0, 0, sc.width, sc.height);
+         const scaled = lanczosResize(srcData, tw, th);
+         ctx.imageSmoothingEnabled = false;
+-        ctx.drawImage(imageDataToCanvas(scaled), ox, oy);
++        const scaledCanvas = imageDataToCanvas(scaled);
++        ctx.drawImage(scaledCanvas, ox, oy);
++        releaseCanvas(scaledCanvas);
+       }
++      const placed = ctx.getImageData(0, 0, out.width, out.height);
++      releaseCanvas(out);
+ 
+       updateState({
+         platenDimensions: platen,
+         platenName: selectedTemplate,
+-        canvasData: ctx.getImageData(0, 0, out.width, out.height),
++        canvasData: placed,
+         // Drop any prealpha buffer from a previous run — this new composite
+         // must be what the Background step reprocesses, not the old layout.
+         prealphaCanvas: null,
+diff --git a/source/src/utils/imageUtils.ts b/source/src/utils/imageUtils.ts
+index dc3f872..66c7a1c 100644
+--- a/source/src/utils/imageUtils.ts
++++ b/source/src/utils/imageUtils.ts
+@@ -8,6 +8,22 @@ export function canvasToImageData(canvas: HTMLCanvasElement): ImageData {
+   return get2dContext(canvas).getImageData(0, 0, canvas.width, canvas.height);
+ }
+ 
++// iOS Safari keeps a canvas's pixel memory alive until garbage collection
++// gets round to it, and caps TOTAL canvas memory. A few full-platen canvases
++// (~100 MB each) left lying around is enough to hit that cap: new canvases
++// then come back blank, getContext returns null, or the tab is killed and
++// reloads. Shrinking a canvas to 0x0 frees its memory immediately.
++export function releaseCanvas(canvas: HTMLCanvasElement | null | undefined): void {
++  if (!canvas) return;
++  canvas.width = 0;
++  canvas.height = 0;
++}
++
++// Longest side we ever keep from an imported file. The biggest platen is
++// 6300 px tall, so anything larger only costs memory — it gets scaled down
++// to fit the platen anyway.
++export const MAX_IMPORT_SIDE = 6300;
++
+ export function imageDataToCanvas(imageData: ImageData): HTMLCanvasElement {
+   const canvas = document.createElement('canvas');
+   canvas.width = imageData.width;
+@@ -38,6 +54,26 @@ export function drawImageToCanvas(img: HTMLImageElement): HTMLCanvasElement {
+   return canvas;
+ }
+ 
++// Decode an imported image straight to pixels, capped at MAX_IMPORT_SIDE,
++// through ONE canvas that is freed before returning.
++export function imageToImageData(img: HTMLImageElement, maxSide = MAX_IMPORT_SIDE): ImageData {
++  const w0 = img.naturalWidth || img.width;
++  const h0 = img.naturalHeight || img.height;
++  const s = Math.min(1, maxSide / Math.max(w0, h0));
++  const canvas = document.createElement('canvas');
++  canvas.width = Math.max(1, Math.round(w0 * s));
++  canvas.height = Math.max(1, Math.round(h0 * s));
++  try {
++    const ctx = get2dContext(canvas);
++    ctx.imageSmoothingEnabled = true;
++    ctx.imageSmoothingQuality = 'high';
++    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
++    return ctx.getImageData(0, 0, canvas.width, canvas.height);
++  } finally {
++    releaseCanvas(canvas);
++  }
++}
++
+ export function resizeImage(
+   imageData: ImageData,
+   targetWidth: number,
+@@ -51,7 +87,10 @@ export function resizeImage(
+   ctx.imageSmoothingEnabled = true;
+   ctx.imageSmoothingQuality = 'high';
+   ctx.drawImage(canvas, 0, 0, targetWidth, targetHeight);
+-  return canvasToImageData(resizedCanvas);
++  releaseCanvas(canvas);
++  const out = canvasToImageData(resizedCanvas);
++  releaseCanvas(resizedCanvas);
++  return out;
+ }
+ 
+ export function centerImageOnCanvas(
+@@ -69,7 +108,10 @@ export function centerImageOnCanvas(
+   const offsetX = Math.floor((targetWidth - sourceImageData.width) / 2);
+   const offsetY = Math.floor((targetHeight - sourceImageData.height) / 2);
+   ctx.drawImage(src, offsetX, offsetY);
+-  return canvasToImageData(target);
++  releaseCanvas(src);
++  const out = canvasToImageData(target);
++  releaseCanvas(target);
++  return out;
+ }
+ 
+ export function cropImageData(
+@@ -85,7 +127,10 @@ export function cropImageData(
+   target.height = height;
+   const src = imageDataToCanvas(imageData);
+   get2dContext(target).drawImage(src, x, y, width, height, 0, 0, width, height);
+-  return canvasToImageData(target);
++  releaseCanvas(src);
++  const out = canvasToImageData(target);
++  releaseCanvas(target);
++  return out;
+ }
+ 
+ export function detectBoundingBox(imageData: ImageData): { x: number; y: number; width: number; height: number } | null {
+-- 
+2.43.0
+
