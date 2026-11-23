@@ -71,6 +71,22 @@
     font-weight:600;font-family:inherit;flex:0 0 auto}
   .fo-undo[disabled]{opacity:.3}
   .fo-headbtns{display:flex;gap:7px;align-items:center;flex:0 0 auto}
+  /* v14.34 AI judge */
+  .fo-ai{display:flex;gap:8px;align-items:center;padding:9px 11px;margin-top:2px;
+    background:rgba(243,194,75,.10);border:1px solid rgba(243,194,75,.28);border-radius:12px}
+  .fo-ai .txt{flex:1;min-width:0;font-size:12.5px;color:rgba(255,255,255,.88);line-height:1.35}
+  .fo-ai .txt b{color:#f3c24b}
+  .fo-askbtn{height:38px;padding:0 15px;border-radius:11px;background:#f3c24b;color:#0d0c10;
+    font-weight:800;font-size:13px;border:0;font-family:inherit;flex:0 0 auto}
+  .fo-askbtn[disabled]{opacity:.5}
+  .fo-panel.aipick{outline:3px solid #f3c24b;outline-offset:-3px}
+  .fo-panel .aitag{position:absolute;top:10px;left:10px;background:#f3c24b;color:#0d0c10;
+    font-size:10.5px;font-weight:800;letter-spacing:.06em;padding:4px 9px;border-radius:7px}
+  .aikey-row{display:flex;gap:8px;margin-top:8px}
+  .aikey-row input{flex:1;min-width:0;height:40px;border-radius:10px;background:rgba(255,255,255,.07);
+    border:1px solid rgba(255,255,255,.12);color:#fff;font-size:13px;padding:0 12px;font-family:inherit}
+  .aikey-row button{flex:0 0 auto;height:40px;padding:0 16px;border-radius:10px;background:#fff;color:#000;
+    font-weight:700;font-size:13px;border:0;font-family:inherit}
   .fo-body{flex:1;display:flex;flex-direction:column;gap:8px;padding:0 12px 12px;min-height:0}
   .fo-panel{flex:1;position:relative;border-radius:14px;overflow:hidden;background:#161618;display:flex;align-items:center;justify-content:center;min-height:0}
   .fo-panel img{max-width:100%;max-height:100%;object-fit:contain;display:block}
@@ -443,6 +459,14 @@
       <button class="ghost" id="clearShirtOverrides">Clear per-card shirt overrides</button>
       <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:6px;line-height:1.4">Clear overrides so the global Size / Shirt Color settings actually apply to all cards.</div>
 
+      <h3 style="margin-top:16px">🤖 Claude AI judge</h3>
+      <div style="font-size:11px;color:rgba(255,255,255,.55);line-height:1.45">Lets Claude actually look at two designs in Face-off and say which prints better, and why. Needs an API key from <b>console.anthropic.com</b> (separate from your Claude subscription, costs a few cents per judgement). Stored only on this phone — never uploaded or saved in the app's code.</div>
+      <div class="aikey-row">
+        <input type="password" id="aiKeyInput" placeholder="sk-ant-..." autocomplete="off" autocapitalize="off" spellcheck="false">
+        <button id="aiKeySave">Save</button>
+      </div>
+      <div style="font-size:11px;margin-top:6px" id="aiKeyStatus"></div>
+
       <h3 style="margin-top:16px">⬇ Export</h3>
       <button class="ghost" id="expBundleKeeps" style="margin-top:0">✓ Everything I green-checked</button>
       <button class="ghost" id="expBundleFinalists">⭐ Everything I starred</button>
@@ -764,6 +788,7 @@ try {
       localStorage.setItem('teesort_sizefix_v12', '1');
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.settings));
     } catch(e){}
+  try { aiRenderKeyStatus(); } catch(e){}
   }
   const v = parseInt(localStorage.getItem(VIEW_KEY)||'3',10);
   if(v===1||v===2||v===3) state.gridCols = v;
@@ -1056,7 +1081,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.33 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.34 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -2414,6 +2439,7 @@ function foRenderPair(){
   body.querySelectorAll('.fo-pick').forEach(btn => btn.addEventListener('click', () => foPick(btn.dataset.id)));
   const u = document.getElementById('foUndo');
   if(u) u.disabled = !(f.history && f.history.length);
+  foRenderAI();
 }
 async function foLoadPanel(id, slot){
   const d = state.designs.find(x => x.id === id);
@@ -2474,6 +2500,118 @@ async function foChampion(id){
   });
 }
 const _foBtn = document.getElementById('faceoffBtn'); if(_foBtn) _foBtn.addEventListener('click', startFaceoff);
+
+// ===== v14.34 Claude AI judge =====
+// Sends the two tee composites currently in Face-off to Claude and asks which one
+// prints/wears better. The key lives only in this device's localStorage — it is never
+// written into the app source (which is public) and never leaves the phone except in
+// the request to Anthropic. Claude only advises; you still tap the winner.
+const AI_KEY_STORE = 'teesort_ai_key';
+const AI_MODEL = 'claude-opus-5';
+function aiGetKey(){ try { return localStorage.getItem(AI_KEY_STORE) || ''; } catch(e){ return ''; } }
+function aiSetKey(k){ try { k ? localStorage.setItem(AI_KEY_STORE, k) : localStorage.removeItem(AI_KEY_STORE); } catch(e){} }
+function aiRenderKeyStatus(){
+  const el = document.getElementById('aiKeyStatus'); if(!el) return;
+  const k = aiGetKey();
+  el.innerHTML = k
+    ? '<span style="color:#4bc37e">✓ Key saved — the Ask Claude button is live in Face-off.</span> <a href="#" id="aiKeyClear" style="color:rgba(255,255,255,.5)">remove</a>'
+    : '<span style="color:rgba(255,255,255,.45)">No key yet — Face-off still works, just without Claude’s opinion.</span>';
+  const c = document.getElementById('aiKeyClear');
+  if(c) c.onclick = (e) => { e.preventDefault(); aiSetKey(''); const i=document.getElementById('aiKeyInput'); if(i) i.value=''; aiRenderKeyStatus(); showToast('Key removed'); };
+}
+function _dataUrlParts(u){
+  const m = /^data:([^;]+);base64,(.*)$/.exec(u || '');
+  return m ? {media_type: m[1], data: m[2]} : null;
+}
+// Ask Claude to compare two designs. Returns {winner:'A'|'B', reason} or throws.
+async function aiJudgePair(urlA, urlB){
+  const key = aiGetKey();
+  if(!key) throw new Error('No API key saved');
+  const a = _dataUrlParts(urlA), b = _dataUrlParts(urlB);
+  if(!a || !b) throw new Error('Could not read the design images');
+  const prompt = 'You are judging two candidate graphics for a DTG-printed t-shirt. '
+    + 'Image A is first, image B is second. Judge ONLY as a t-shirt: does it read in half a second '
+    + 'from across a room, is there one clear focal point, will the detail and text survive printing on '
+    + 'fabric, and would someone actually wear it. Cooler artwork does not automatically win if it reads busy. '
+    + 'Be decisive and honest - say which is the stronger shirt. '
+    + 'Reply with ONLY raw JSON, no markdown fence: {"winner":"A" or "B","reason":"one sentence, max 22 words"}';
+  const body = {
+    model: AI_MODEL,
+    max_tokens: 300,
+    messages: [{role:'user', content:[
+      {type:'image', source:{type:'base64', media_type:a.media_type, data:a.data}},
+      {type:'image', source:{type:'base64', media_type:b.media_type, data:b.data}},
+      {type:'text', text: prompt}
+    ]}]
+  };
+  const res = await fetch('https://api.anthropic.com/v1/messages', {
+    method:'POST',
+    headers:{
+      'content-type':'application/json',
+      'x-api-key': key,
+      'anthropic-version':'2023-06-01',
+      'anthropic-dangerous-direct-browser-access':'true'
+    },
+    body: JSON.stringify(body)
+  });
+  if(!res.ok){
+    let detail = '';
+    try { const j = await res.json(); detail = (j.error && j.error.message) || ''; } catch(e){}
+    if(res.status === 401) throw new Error('Key rejected - check it in Settings');
+    if(res.status === 429) throw new Error('Rate limited - wait a moment');
+    throw new Error('Claude error ' + res.status + (detail ? ': ' + detail.slice(0,80) : ''));
+  }
+  const j = await res.json();
+  const txt = ((j.content || []).find(c => c.type === 'text') || {}).text || '';
+  const m = txt.match(/\{[\s\S]*\}/);
+  if(!m) throw new Error('Unexpected reply from Claude');
+  const out = JSON.parse(m[0]);
+  if(out.winner !== 'A' && out.winner !== 'B') throw new Error('Unexpected reply from Claude');
+  return out;
+}
+// Wire the Ask Claude row into the current Face-off pairing.
+function foRenderAI(){
+  const f = faceoff; if(!f) return;
+  const body = document.getElementById('foBody'); if(!body) return;
+  if(!aiGetKey()) return;                       // no key -> no row, Face-off unchanged
+  const row = document.createElement('div');
+  row.className = 'fo-ai';
+  row.innerHTML = '<div class="txt" id="foAiTxt">Not sure? Let Claude look at both.</div>'
+                + '<button class="fo-askbtn" id="foAskBtn">Ask Claude</button>';
+  body.appendChild(row);
+  const btn = document.getElementById('foAskBtn'), txt = document.getElementById('foAiTxt');
+  btn.addEventListener('click', async () => {
+    const pa = document.querySelector('.fo-panel[data-slot="a"]'), pb = document.querySelector('.fo-panel[data-slot="b"]');
+    const ia = pa && pa.querySelector('img'), ib = pb && pb.querySelector('img');
+    if(!ia || !ib){ txt.textContent = 'Still loading the previews - try again in a second.'; return; }
+    btn.disabled = true; btn.textContent = 'Looking...'; txt.textContent = 'Claude is comparing them...';
+    try {
+      const v = await aiJudgePair(ia.src, ib.src);
+      const win = v.winner === 'A' ? pa : pb;
+      [pa, pb].forEach(p => { p.classList.remove('aipick'); const t = p.querySelector('.aitag'); if(t) t.remove(); });
+      win.classList.add('aipick');
+      const tag = document.createElement('span'); tag.className = 'aitag'; tag.textContent = "CLAUDE'S PICK";
+      win.insertBefore(tag, win.firstChild);
+      txt.innerHTML = '<b>Claude picks the highlighted one.</b> ' + String(v.reason || '').replace(/[<>]/g,'');
+      btn.textContent = 'Ask again';
+      if(navigator.vibrate) navigator.vibrate(8);
+    } catch(err){
+      txt.textContent = (err && err.message) ? err.message : 'Could not reach Claude';
+      btn.textContent = 'Try again';
+    }
+    btn.disabled = false;
+  });
+}
+const _aiSave = document.getElementById('aiKeySave');
+if(_aiSave) _aiSave.onclick = () => {
+  const i = document.getElementById('aiKeyInput'); if(!i) return;
+  const v = i.value.trim();
+  if(v && !/^sk-ant-/.test(v)){ showToast('That does not look like an Anthropic key (starts sk-ant-)'); return; }
+  aiSetKey(v); i.value = ''; aiRenderKeyStatus();
+  showToast(v ? 'Key saved on this device' : 'Key removed');
+};
+aiRenderKeyStatus();
+
 
 // ===== Fullscreen viewer (v3 - simple single-slide) =====
 let viewerState = {
