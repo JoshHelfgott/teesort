@@ -55,6 +55,24 @@
   .libsearch::placeholder{color:rgba(255,255,255,.38)}
   .libsearch:focus{border-color:rgba(255,255,255,.22);background:rgba(255,255,255,.1)}
   .libsort{flex:0 0 auto;height:34px;border-radius:10px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.09);color:rgba(255,255,255,.85);font-size:12px;font-weight:500;padding:0 8px;-webkit-appearance:none;outline:none}
+  .libbtn{flex:0 0 auto;height:34px;padding:0 12px;border-radius:10px;background:rgba(255,255,255,.08);
+    border:1px solid rgba(255,255,255,.12);color:#fff;font-size:12px;font-weight:600;font-family:inherit}
+  .libbtn.on{background:#fff;color:#000}
+  .card.selected{outline:3px solid #f3c24b;outline-offset:-3px;border-radius:14px}
+  .card .selmark{position:absolute;top:8px;left:8px;width:26px;height:26px;border-radius:50%;
+    background:rgba(0,0,0,.55);border:2px solid #fff;z-index:6;display:none;align-items:center;
+    justify-content:center;color:#fff;font-size:15px;font-weight:800}
+  body.selmode .card .selmark{display:flex}
+  body.selmode .card.selected .selmark{background:#f3c24b;color:#0d0c10;border-color:#f3c24b}
+  body.selmode .card-preview{pointer-events:none}
+  .selbar{position:fixed;left:0;right:0;bottom:0;z-index:45;display:none;gap:6px;padding:9px 10px
+    calc(9px + env(safe-area-inset-bottom));background:rgba(14,13,16,.97);border-top:1px solid rgba(255,255,255,.12);
+    align-items:center;overflow-x:auto;scrollbar-width:none}
+  body.selmode .selbar{display:flex}
+  .selbar .cnt{flex:0 0 auto;font-size:12.5px;font-weight:800;color:#f3c24b;padding:0 4px;white-space:nowrap}
+  .selbar button{flex:0 0 auto;height:38px;padding:0 12px;border-radius:10px;border:0;font-family:inherit;
+    font-size:12.5px;font-weight:700;background:rgba(255,255,255,.1);color:#fff;white-space:nowrap}
+  .selbar button.gold{background:#f3c24b;color:#0d0c10}
   .libcount{flex:0 0 auto;font-size:11px;color:rgba(255,255,255,.45);font-variant-numeric:tabular-nums;white-space:nowrap}
   /* v14.28 Face-off knockout */
   .fo-overlay{position:fixed;inset:0;z-index:90;background:#0b0b0c;display:none;flex-direction:column}
@@ -414,6 +432,7 @@
         <option value="finalist">Finalists ★</option>
         <option value="edited">Edited first</option>
       </select>
+      <button class="libbtn" id="selToggle">Select</button>
       <span class="libcount" id="libCount"></span>
     </div>
   </header>
@@ -422,6 +441,16 @@
   <main id="main"></main>
 </div>
 
+<div class="selbar" id="selBar">
+  <span class="cnt" id="selCount">0</span>
+  <button id="selAll">All shown</button>
+  <button id="selNone">Clear</button>
+  <button class="gold" id="selRank">🤖 Rank</button>
+  <button id="selStar">⭐</button>
+  <button id="selKeep">✓ Keep</button>
+  <button id="selReject">✕ Reject</button>
+  <button id="selDone">Done</button>
+</div>
 <div class="toast" id="toast">
   <span class="pulse"></span>
   <span id="toastMsg"></span>
@@ -1120,7 +1149,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.37 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.38 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -1159,6 +1188,13 @@ function renderEmpty(){
   $('emptyImport').onclick = () => $('fileInput').click();
 }
 
+// Does this design still belong in what's on screen? Mirrors getFiltered()'s status rules.
+function belongsInCurrentView(d){
+  if(!d) return false;
+  if(state.filter === 'all') return d.status !== 'archived' && d.status !== 'rejected';
+  if(state.filter === 'inbox') return d.status === 'inbox' || !STATUSES.includes(d.status);
+  return d.status === state.filter;
+}
 function getFiltered(){
   // 1. status filter (unchanged behaviour)
   let list;
@@ -1289,6 +1325,7 @@ function renderGrid(){
     ? `<div id="loadMoreWrap" style="padding:18px 12px 30px;text-align:center"><button class="ghost" id="loadMoreBtn" style="max-width:240px">Show ${Math.min(PAGE_SIZE, remaining)} more (${remaining} hidden)</button></div>`
     : '';
   main.innerHTML = `<div class="grid cols-${state.gridCols}">${shown.map(cardHtml).join('')}</div>${loadMoreHtml}`;
+  if(selMode) selSync();
   ensureCardObserver();
   const visibleCount = state.gridCols * 6;
   const outputW = state.gridCols === 1 ? 900 : state.gridCols === 2 ? 600 : 460;
@@ -1342,6 +1379,7 @@ function cardHtml(d){
           <button class="fin-star ${d.finalist?'on':''}" data-fin="${d.id}" aria-label="Toggle finalist"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l2.9 6.9 7.1.6-5.4 4.7 1.7 7.3L12 17.8 5.7 21.5l1.7-7.3L2 9.5l7.1-.6L12 2z"/></svg></button>
           ${(d.status && d.status !== 'inbox') ? `<span class="badge status status-${d.status}"><span class="label">${STATUS_LABELS[d.status]||d.status}</span></span>` : ''}
         </div>
+        <div class="selmark">✓</div>
         <button class="card-size-pill" data-size-toggle aria-label="Toggle size"><span class="cs-label">${cardSizeLabel(d)}</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3l4 4-4 4M21 7H3M7 21l-4-4 4-4M3 17h18"/></svg></button>
       </div>
       <div class="actions">
@@ -1581,9 +1619,10 @@ async function setStatus(id, status){
   state.lastAction = {id, prev, next: d.status};
   // Update filter counts
   renderFilters();
-  // If current filter no longer matches, hide just that card (don't re-render)
-  if(state.filter !== 'all' && state.filter !== d.status &&
-     !(state.filter === 'inbox' && d.status === 'inbox')){
+  // v14.38: 'All' already excludes rejected/archived, but the old test skipped the
+  // removal whenever the filter WAS 'all' - so rejecting from the default view left
+  // the card sitting there. Ask the same question getFiltered() asks instead.
+  if(!belongsInCurrentView(d)){
     const card = document.querySelector(`.card[data-id="${id}"]`);
     if(card){
       card.style.transition = 'opacity .18s, transform .18s';
@@ -2439,8 +2478,12 @@ function foUndo(){
   f.round = prev.round; f.a = prev.a; f.b = prev.b;
   foRenderPair();
 }
-function startFaceoff(){
-  const contenders = getFiltered().filter(d => d && d.blob).map(d => d.id);
+function startFaceoff(explicitIds){
+  const pool0 = explicitIds && explicitIds.length
+    ? explicitIds.map(id => state.designs.find(x => x.id === id)).filter(Boolean)
+    : getFiltered();
+  const contenders = pool0.filter(d => d && d.blob).map(d => d.id);
+  if(selMode) selSetMode(false);
   if(contenders.length < 2){ showToast('Need 2+ designs — search/filter to gather variants first'); return; }
   // Light shuffle so seeding isn't biased by grid order.
   const pool = contenders.slice();
@@ -2449,7 +2492,7 @@ function startFaceoff(){
   foEl().classList.add('open');
   // With a key saved and more than two in play, offer the batch ranking instead of
   // tapping through a whole bracket.
-  if(aiGetKey() && contenders.length > 2){ foRenderChoose(); return; }
+  if(contenders.length > 2){ foRenderChoose(); return; }
   foNext();
 }
 function foRenderChoose(){
@@ -2461,11 +2504,21 @@ function foRenderChoose(){
   document.getElementById('foBody').innerHTML =
     '<div class="fo-choose"><h4>' + f.all.length + ' designs</h4>' +
     '<p>Let Claude look at them all and rank them, or go through two at a time yourself.</p>' +
-    '<button class="fo-opt gold" id="foModeAI"><b>🤖 Let Claude rank all ' + f.all.length + '</b>' +
+    '<button class="fo-opt gold" id="foModeAI"><b>🤖 Let Claude rank all ' + f.all.length + (aiGetKey() ? '' : ' (needs key)') + '</b>' +
     '<span>Claude looks at every design and puts the best on top, with a reason for each. One tap, no bracket.</span></button>' +
     '<button class="fo-opt" id="foModeManual"><b>👆 I\u2019ll pick, two at a time</b>' +
     '<span>The knockout. ' + (f.all.length - 1) + ' taps to crown one champion.</span></button></div>';
-  document.getElementById('foModeAI').onclick = foRunAIRank;
+  document.getElementById('foModeAI').onclick = () => {
+    if(!aiGetKey()){
+      document.getElementById('foBody').innerHTML =
+        '<div class="fo-choose"><h4>Claude needs a key first</h4>' +
+        '<p>Close this, open <b>Settings</b> (gear, top right), find <b>🤖 Claude AI judge</b>, and paste an API key from console.anthropic.com. Then come back here.<br><br>Ranking 100 designs costs about 30 cents.</p>' +
+        '<button class="fo-opt" id="foBackChoose"><b>← Back</b><span>Pick two at a time instead.</span></button></div>';
+      const bk = document.getElementById('foBackChoose'); if(bk) bk.onclick = foRenderChoose;
+      return;
+    }
+    foRunAIRank();
+  };
   document.getElementById('foModeManual').onclick = () => foNext();
 }
 function closeFaceoff(){ const o = document.getElementById('foOverlay'); if(o) o.classList.remove('open'); faceoff = null; }
@@ -2558,6 +2611,79 @@ async function foChampion(id){
     closeFaceoff(); renderFilters(); renderGrid();
   });
 }
+
+// ===== v14.38 multi-select: tap or drag across cards to pick a batch =====
+const selected = new Set();
+let selMode = false, selDragging = false, selDragVal = true;
+function selSync(){
+  const c = document.getElementById('selCount');
+  if(c) c.textContent = selected.size + ' selected';
+  document.querySelectorAll('.card').forEach(el => {
+    el.classList.toggle('selected', selected.has(el.getAttribute('data-id')));
+  });
+}
+function selSetMode(on){
+  selMode = on;
+  document.body.classList.toggle('selmode', on);
+  const b = document.getElementById('selToggle');
+  if(b){ b.classList.toggle('on', on); b.textContent = on ? 'Done' : 'Select'; }
+  if(!on) selected.clear();
+  selSync();
+}
+function selToggleId(id, force){
+  if(!id) return;
+  const want = (force === undefined) ? !selected.has(id) : force;
+  if(want) selected.add(id); else selected.delete(id);
+  const el = document.querySelector('.card[data-id="' + id + '"]');
+  if(el) el.classList.toggle('selected', want);
+  const c = document.getElementById('selCount');
+  if(c) c.textContent = selected.size + ' selected';
+}
+// Drag across cards to sweep a bunch at once.
+(function(){
+  const m = document.getElementById('main'); if(!m) return;
+  const cardAt = (x, y) => {
+    const el = document.elementFromPoint(x, y);
+    return el && el.closest ? el.closest('.card') : null;
+  };
+  m.addEventListener('pointerdown', e => {
+    if(!selMode) return;
+    const card = cardAt(e.clientX, e.clientY); if(!card) return;
+    const id = card.getAttribute('data-id');
+    selDragging = true; selDragVal = !selected.has(id);
+    selToggleId(id, selDragVal);
+  });
+  m.addEventListener('pointermove', e => {
+    if(!selMode || !selDragging) return;
+    const card = cardAt(e.clientX, e.clientY); if(!card) return;
+    selToggleId(card.getAttribute('data-id'), selDragVal);
+  });
+  const end = () => { selDragging = false; };
+  m.addEventListener('pointerup', end);
+  m.addEventListener('pointercancel', end);
+})();
+function selWire(id, fn){ const e = document.getElementById(id); if(e) e.onclick = fn; }
+selWire('selToggle', () => selSetMode(!selMode));
+selWire('selDone', () => selSetMode(false));
+selWire('selNone', () => { selected.clear(); selSync(); });
+selWire('selAll', () => { getFiltered().forEach(d => selected.add(d.id)); selSync(); });
+selWire('selRank', () => {
+  if(!selected.size){ showToast('Tap some designs first'); return; }
+  startFaceoff(Array.from(selected));
+});
+async function selApply(fn, label){
+  if(!selected.size){ showToast('Tap some designs first'); return; }
+  const ids = Array.from(selected);
+  for(const id of ids){
+    const d = state.designs.find(x => x.id === id);
+    if(d) await fn(d);
+  }
+  showToast(label.replace('{n}', ids.length));
+  selSetMode(false); renderFilters(); renderGrid();
+}
+selWire('selStar',   () => selApply(async d => { d.finalist = true; if(d.status !== 'round1') d.status = 'round1'; await persistDesign(d); }, 'Starred {n}'));
+selWire('selKeep',   () => selApply(async d => { d.status = 'round1'; await persistDesign(d); }, 'Kept {n}'));
+selWire('selReject', () => selApply(async d => { d.status = 'rejected'; await persistDesign(d); }, 'Rejected {n}'));
 const _foBtn = document.getElementById('faceoffBtn'); if(_foBtn) _foBtn.addEventListener('click', startFaceoff);
 
 // ===== v14.34 Claude AI judge =====
@@ -2570,15 +2696,15 @@ const AI_TASTE_STORE = 'teesort_ai_taste';
 // A starting draft in the owner's own words. Meant to be edited - it is sensibility,
 // not a spec, and the prompt tells Claude to treat it that way.
 const AI_TASTE_DEFAULT = [
-  "I make Britney bootleg-style tees.",
+  "I make bootleg-style tees - Britney often, but also Madonna and others.",
   "",
-  "I like designs that feel like they genuinely came out of that era (late 90s / early 2000s) - like you found the shirt, not like someone made it last week.",
+  "I'm drawn to shirts that feel like actual late-90s / early-2000s merchandise: bootlegs, tour shirts, odd retail promos. Like you found the shirt, not like someone made it last week. A clean Pepsi graphic can feel more convincing than a collage covered in fake age - the specific photos, the original lettering, and how the elements relate to each other are what matter.",
   "",
-  "I like REAL bootleg aesthetics: photo collages, heavy ink, era-correct type and layout, slightly crude in the way actual bootlegs were.",
+  "What loses it: generic retro decoration, almost-right AI replacements, modern Hot Topic nostalgia merch, clean 2020s pastiche. A layout can look professionally finished and still have the wrong feeling.",
   "",
-  "I do NOT want: modern Hot Topic style nostalgia merch, clean 2020s pastiche, or fake-bootleg clipart (lightning bolts, stars, random Y2K sparkle junk slapped on).",
+  "But don't flip that into rewarding mess. Artificially distressed designs and deliberately chaotic layouts can feel just as manufactured as clean recreations. Roughness is not evidence of authenticity.",
   "",
-  "Authenticity of feel beats polish. A slightly rough design that feels real beats a clean one that feels staged."
+  "Distressing isn't an automatic reject. If it helps this particular shirt, say what it adds. If you like the shirt despite it, say that. If you'd like it better without it, say that instead - I want to know which judgment you're making."
 ].join("\n");
 function aiGetTaste(){ try { const v = localStorage.getItem(AI_TASTE_STORE); return v === null ? AI_TASTE_DEFAULT : v; } catch(e){ return AI_TASTE_DEFAULT; } }
 function aiSetTaste(v){ try { localStorage.setItem(AI_TASTE_STORE, v); } catch(e){} }
@@ -2588,12 +2714,14 @@ function aiTasteBlock(){
   const t = (aiGetTaste() || '').trim();
   if(!t) return '';
   return "\n\nTHIS IS THE OWNER'S TASTE, IN THEIR OWN WORDS:\n" + t
-    + "\n\nTreat that as sensibility, NOT a checklist. Do not score criteria off one by one. "
-    + "Look at the shirt and judge whether it FEELS right to this person - would they be glad they printed it. "
-    + "Where craft and their taste disagree, their taste wins: something slightly rough that feels authentic to them "
-    + "beats something clean that feels staged or like modern nostalgia merch.";
+    + "\n\nTreat that as sensibility, NOT a checklist. Do not score criteria off one by one, and do not "
+    + "count period-correct elements - judge how the whole design works on the shirt, as a person looking at it. "
+    + "Don't manufacture criticism just to match a stated preference, and don't reward roughness or clutter as "
+    + "proof of authenticity. Score the design AS SHOWN; if its main weakness is fixable, say so in the reason "
+    + "rather than scoring the imagined fixed version. A design that needs work can still be the strongest here. "
+    + "Their library contains experiments and throwaways, so a design being present is not evidence they like it.";
 }
-const AI_MODEL = 'claude-opus-5';
+const AI_MODEL = 'claude-opus-5-5';
 function aiGetKey(){ try { return localStorage.getItem(AI_KEY_STORE) || ''; } catch(e){ return ''; } }
 function aiSetKey(k){ try { k ? localStorage.setItem(AI_KEY_STORE, k) : localStorage.removeItem(AI_KEY_STORE); } catch(e){} }
 function aiRenderKeyStatus(){
