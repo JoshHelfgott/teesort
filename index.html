@@ -85,6 +85,29 @@
   .aikey-row{display:flex;gap:8px;margin-top:8px}
   .aikey-row input{flex:1;min-width:0;height:40px;border-radius:10px;background:rgba(255,255,255,.07);
     border:1px solid rgba(255,255,255,.12);color:#fff;font-size:13px;padding:0 12px;font-family:inherit}
+  .fo-choose{flex:1;display:flex;flex-direction:column;justify-content:center;gap:12px;padding:18px;text-align:center}
+  .fo-choose h4{color:#fff;font-size:17px;font-weight:800;margin:0}
+  .fo-choose p{color:rgba(255,255,255,.55);font-size:12.5px;margin:0;line-height:1.45}
+  .fo-opt{display:block;width:100%;max-width:340px;margin:0 auto;padding:15px;border-radius:14px;
+    border:1px solid rgba(255,255,255,.14);background:rgba(255,255,255,.06);color:#fff;text-align:left;font-family:inherit}
+  .fo-opt.gold{background:rgba(243,194,75,.14);border-color:rgba(243,194,75,.4)}
+  .fo-opt b{display:block;font-size:14.5px;font-weight:800;margin-bottom:3px}
+  .fo-opt span{font-size:11.5px;color:rgba(255,255,255,.6);line-height:1.4}
+  .fo-ranklist{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:9px;padding-bottom:10px}
+  .rk{display:flex;gap:11px;align-items:flex-start;background:var(--panel,#161419);
+    border:1px solid rgba(255,255,255,.1);border-radius:13px;padding:9px}
+  .rk.top{border-color:rgba(243,194,75,.55);background:rgba(243,194,75,.07)}
+  .rk .n{flex:0 0 26px;text-align:center;font-family:ui-monospace,Menlo,monospace;font-weight:800;
+    font-size:14px;color:rgba(255,255,255,.5);padding-top:22px}
+  .rk.top .n{color:#f3c24b}
+  .rk img{flex:0 0 66px;width:66px;height:79px;object-fit:cover;border-radius:8px;background:#000}
+  .rk .info{flex:1;min-width:0}
+  .rk .nm{font-size:12.5px;font-weight:700;color:#fff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rk .sc{font-family:ui-monospace,Menlo,monospace;font-size:12px;color:#f3c24b;font-weight:700;margin:2px 0}
+  .rk .rs{font-size:11.5px;color:rgba(255,255,255,.62);line-height:1.35}
+  .rk .star{flex:0 0 auto;align-self:center;width:38px;height:38px;border-radius:10px;border:0;
+    background:rgba(255,255,255,.08);color:rgba(255,255,255,.45);font-size:17px;font-family:inherit}
+  .rk .star.on{background:#f3c24b;color:#0d0c10}
   .aikey-row button{flex:0 0 auto;height:40px;padding:0 16px;border-radius:10px;background:#fff;color:#000;
     font-weight:700;font-size:13px;border:0;font-family:inherit}
   .fo-body{flex:1;display:flex;flex-direction:column;gap:8px;padding:0 12px 12px;min-height:0}
@@ -1081,7 +1104,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.34 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.35 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -2405,9 +2428,28 @@ function startFaceoff(){
   // Light shuffle so seeding isn't biased by grid order.
   const pool = contenders.slice();
   for(let i = pool.length - 1; i > 0; i--){ const j = Math.floor(Math.random() * (i + 1)); const t = pool[i]; pool[i] = pool[j]; pool[j] = t; }
-  faceoff = { pool, pending: [], losers: [], round: 1, initial: contenders.length, a: null, b: null, history: [] };
+  faceoff = { pool, pending: [], losers: [], round: 1, initial: contenders.length, a: null, b: null, history: [], all: contenders.slice() };
   foEl().classList.add('open');
+  // With a key saved and more than two in play, offer the batch ranking instead of
+  // tapping through a whole bracket.
+  if(aiGetKey() && contenders.length > 2){ foRenderChoose(); return; }
   foNext();
+}
+function foRenderChoose(){
+  const f = faceoff; if(!f) return;
+  const t = document.getElementById('foTitle'), sub = document.getElementById('foSub');
+  if(t) t.textContent = 'How do you want to decide?';
+  if(sub) sub.textContent = f.all.length + ' designs in play';
+  const u = document.getElementById('foUndo'); if(u) u.disabled = true;
+  document.getElementById('foBody').innerHTML =
+    '<div class="fo-choose"><h4>' + f.all.length + ' designs</h4>' +
+    '<p>Let Claude look at them all and rank them, or go through two at a time yourself.</p>' +
+    '<button class="fo-opt gold" id="foModeAI"><b>🤖 Let Claude rank all ' + f.all.length + '</b>' +
+    '<span>Claude looks at every design and puts the best on top, with a reason for each. One tap, no bracket.</span></button>' +
+    '<button class="fo-opt" id="foModeManual"><b>👆 I\u2019ll pick, two at a time</b>' +
+    '<span>The knockout. ' + (f.all.length - 1) + ' taps to crown one champion.</span></button></div>';
+  document.getElementById('foModeAI').onclick = foRunAIRank;
+  document.getElementById('foModeManual').onclick = () => foNext();
 }
 function closeFaceoff(){ const o = document.getElementById('foOverlay'); if(o) o.classList.remove('open'); faceoff = null; }
 function foRemaining(){ const f = faceoff; return f.pool.length + f.pending.length + 2; }
@@ -2568,6 +2610,153 @@ async function aiJudgePair(urlA, urlB){
   const out = JSON.parse(m[0]);
   if(out.winner !== 'A' && out.winner !== 'B') throw new Error('Unexpected reply from Claude');
   return out;
+}
+// ---- Batch ranking: show Claude many designs at once and get them ordered ----
+// Images go up in chunks (the request gets unwieldy past ~12 images), each chunk is
+// scored on the same 0-10 rubric, then chunks are merged by score. With more than one
+// chunk the top of the pile is re-scored together so the final order is apples-to-apples.
+const AI_CHUNK = 12;
+async function aiRankBatch(ids, onProgress){
+  const key = aiGetKey();
+  if(!key) throw new Error('No API key saved');
+  const chunks = [];
+  for(let i = 0; i < ids.length; i += AI_CHUNK) chunks.push(ids.slice(i, i + AI_CHUNK));
+  let done = 0, total = ids.length + (chunks.length > 1 ? Math.min(8, ids.length) : 0);
+  const scoreChunk = async (chunkIds) => {
+    const content = [];
+    for(let i = 0; i < chunkIds.length; i++){
+      const d = state.designs.find(x => x.id === chunkIds[i]);
+      if(!d) continue;
+      const url = await composite(d, state.settings, 460);   // small: many images per request
+      const parts = _dataUrlParts(url);
+      if(!parts) continue;
+      content.push({type:'text', text:'Design ' + (i + 1) + ':'});
+      content.push({type:'image', source:{type:'base64', media_type:parts.media_type, data:parts.data}});
+      done++; if(onProgress) onProgress(done / total);
+    }
+    content.push({type:'text', text:
+      'These are ' + chunkIds.length + ' candidate graphics shown on a t-shirt. Score each as a SHIRT, not as art: '
+      + 'does it read in half a second across a room, is there one clear focal point, will the detail and any text '
+      + 'survive DTG printing on fabric, would someone wear it. Busy or low-contrast work should score lower even if '
+      + 'the artwork is cool. Use the full 0-10 range and be honest - do not cluster everything around 7. '
+      + 'Reply with ONLY raw JSON, no markdown fence: '
+      + '{"results":[{"n":1,"score":8.5,"reason":"max 16 words"}]} with one entry per design, n matching the label.'});
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST',
+      headers:{'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01',
+               'anthropic-dangerous-direct-browser-access':'true'},
+      body: JSON.stringify({model: AI_MODEL, max_tokens: 2000, messages:[{role:'user', content}]})
+    });
+    if(!res.ok){
+      let detail=''; try { const j = await res.json(); detail = (j.error && j.error.message) || ''; } catch(e){}
+      if(res.status === 401) throw new Error('Key rejected - check it in Settings');
+      if(res.status === 429) throw new Error('Rate limited - try a smaller batch in a moment');
+      throw new Error('Claude error ' + res.status + (detail ? ': ' + detail.slice(0,80) : ''));
+    }
+    const j = await res.json();
+    const txt = ((j.content || []).find(c => c.type === 'text') || {}).text || '';
+    const m = txt.match(/\{[\s\S]*\}/);
+    if(!m) throw new Error('Unexpected reply from Claude');
+    const parsed = JSON.parse(m[0]);
+    return (parsed.results || []).map(r => ({
+      id: chunkIds[(r.n | 0) - 1],
+      score: Math.max(0, Math.min(10, Number(r.score) || 0)),
+      reason: String(r.reason || '').slice(0, 140)
+    })).filter(r => r.id);
+  };
+  let out = [];
+  for(const c of chunks) out = out.concat(await scoreChunk(c));
+  out.sort((a, b) => b.score - a.score);
+  // Re-score the leaders together so cross-chunk order is trustworthy.
+  if(chunks.length > 1 && out.length > 2){
+    const finalists = out.slice(0, Math.min(8, out.length));
+    try {
+      const re = await scoreChunk(finalists.map(r => r.id));
+      const byId = {}; re.forEach(r => { byId[r.id] = r; });
+      out = out.map(r => byId[r.id] ? {id:r.id, score:byId[r.id].score, reason:byId[r.id].reason} : r)
+               .sort((a, b) => b.score - a.score);
+    } catch(e){ /* keep the merged order if the finals pass fails */ }
+  }
+  return out;
+}
+async function foRunAIRank(){
+  const f = faceoff; if(!f) return;
+  const ids = f.all.slice();
+  const t = document.getElementById('foTitle'), sub = document.getElementById('foSub');
+  if(t) t.textContent = 'Claude is looking...';
+  const body = document.getElementById('foBody');
+  body.innerHTML = '<div class="fo-choose"><h4 id="aiPct">0%</h4>'
+    + '<p id="aiProg">Sending ' + ids.length + ' designs to Claude. Hang tight.</p></div>';
+  const setP = (frac) => {
+    const e = document.getElementById('aiPct'); if(e) e.textContent = Math.round(frac * 100) + '%';
+  };
+  try {
+    const results = await aiRankBatch(ids, setP);
+    if(!faceoff) return;                          // user bailed mid-flight
+    if(!results.length) throw new Error('Claude returned nothing to rank');
+    foRenderRanked(results);
+  } catch(err){
+    if(!faceoff) return;
+    if(t) t.textContent = 'Could not rank';
+    body.innerHTML = '<div class="fo-choose"><h4>Hmm</h4><p>' +
+      String((err && err.message) || 'Something went wrong').replace(/[<>]/g,'') + '</p>' +
+      '<button class="fo-opt" id="aiRetry"><b>Try again</b><span>Resend the same designs.</span></button>' +
+      '<button class="fo-opt" id="aiBail"><b>Pick them myself instead</b><span>Switch to the two-at-a-time knockout.</span></button></div>';
+    const r = document.getElementById('aiRetry'); if(r) r.onclick = foRunAIRank;
+    const bl = document.getElementById('aiBail'); if(bl) bl.onclick = () => foNext();
+  }
+}
+function foRenderRanked(results){
+  const f = faceoff; if(!f) return;
+  f.ranked = results;
+  const t = document.getElementById('foTitle'), sub = document.getElementById('foSub');
+  if(t) t.textContent = 'Claude’s ranking';
+  if(sub) sub.textContent = 'Best on top · tap ⭐ to keep · you decide';
+  const body = document.getElementById('foBody');
+  body.innerHTML = '<div class="fo-ranklist" id="rkList"></div>'
+    + '<div class="fo-actions" style="max-width:none;margin-top:4px">'
+    + '<button class="fo-btn primary" id="rkStarTop" style="background:#f3c24b;color:#0d0c10">⭐ Star top 3</button>'
+    + '<button class="fo-btn ghost" id="rkDone">Done</button></div>';
+  const list = document.getElementById('rkList');
+  results.forEach((r, i) => {
+    const d = state.designs.find(x => x.id === r.id); if(!d) return;
+    const row = document.createElement('div');
+    row.className = 'rk' + (i < 3 ? ' top' : '');
+    row.innerHTML = '<div class="n">' + (i + 1) + '</div>'
+      + '<img alt="" data-img="' + r.id + '">'
+      + '<div class="info"><div class="nm">' + String(d.name || 'Design').replace(/[<>]/g,'') + '</div>'
+      + '<div class="sc">' + r.score.toFixed(1) + ' / 10</div>'
+      + '<div class="rs">' + String(r.reason || '').replace(/[<>]/g,'') + '</div></div>'
+      + '<button class="star' + (d.finalist ? ' on' : '') + '" data-star="' + r.id + '">★</button>';
+    list.appendChild(row);
+    composite(d, state.settings, 320).then(u => {
+      const img = list.querySelector('img[data-img="' + r.id + '"]'); if(img) img.src = u;
+    }).catch(() => {});
+  });
+  list.querySelectorAll('[data-star]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const d = state.designs.find(x => x.id === btn.dataset.star); if(!d) return;
+      d.finalist = !d.finalist;
+      if(d.finalist && d.status !== 'round1') d.status = 'round1';
+      await persistDesign(d);
+      btn.classList.toggle('on', d.finalist);
+      if(navigator.vibrate) navigator.vibrate(6);
+    });
+  });
+  document.getElementById('rkStarTop').onclick = async () => {
+    for(const r of results.slice(0, 3)){
+      const d = state.designs.find(x => x.id === r.id); if(!d) continue;
+      d.finalist = true; if(d.status !== 'round1') d.status = 'round1';
+      await persistDesign(d);
+    }
+    list.querySelectorAll('[data-star]').forEach(b => {
+      const d = state.designs.find(x => x.id === b.dataset.star);
+      if(d) b.classList.toggle('on', !!d.finalist);
+    });
+    renderFilters();
+    showToast('Starred the top 3');
+  };
+  document.getElementById('rkDone').onclick = () => { closeFaceoff(); renderFilters(); renderGrid(); };
 }
 // Wire the Ask Claude row into the current Face-off pairing.
 function foRenderAI(){
