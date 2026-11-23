@@ -778,8 +778,8 @@ const STATUS_LABELS = {inbox:'New', round1:'Keep', needs_fixing:'Fix', rejected:
 // Full bounded to torso width only (no shoulder/sleeve bleed)
 const ZONES_FRONT = {
   // v14.25: both sizes scaled +4% together (locked 80%/89% ratio preserved) - user wanted slightly bigger
-  '15x18':      {maxW:0.412, maxH:0.395, topY:0.200, centerX:0.500, label:'15\u00d718'},
-  '12x16':      {maxW:0.330, maxH:0.352, topY:0.215, centerX:0.500, label:'12\u00d716'},
+  '15x18':      {maxW:0.424, maxH:0.407, topY:0.182, centerX:0.500, label:'15\u00d718'},
+  '12x16':      {maxW:0.339, maxH:0.362, topY:0.193, centerX:0.500, label:'12\u00d716'},
   'horizontal': {maxW:0.420, maxH:0.140, topY:0.275, centerX:0.500, label:'Horizontal'},
   'full':       {maxW:0.440, maxH:0.520, topY:0.172, centerX:0.500, label:'Full front'}
 };
@@ -957,11 +957,19 @@ function resolvedSize(d, settings){
   const ar = d.aspectRatio || 1;
   return ar > 1.3 ? 'horizontal' : '15x18';
 }
-function cardSizeLabel(d){
-  const eff = resolvedSize(d, state.settings);
-  if(eff === '12x16') return '12\u00d716';
-  return '15\u00d718'; // default label for anything else, tapping will flip to 12x16
+// v14.37: the pill used to call EVERYTHING that wasn't 12x16 "15x18" - so a design
+// sitting on the big 'full' zone displayed 15x18 while rendering much larger, and the
+// two-way toggle could never get back to it. Label the real zone, and cycle through
+// all three so nothing is ever unreachable.
+const SIZE_CYCLE = ['full', '15x18', '12x16'];
+const SIZE_LABELS = {full:'MAX', '15x18':'15\u00d718', '12x16':'12\u00d716', horizontal:'BAND'};
+function sizeLabelFor(key){ return SIZE_LABELS[key] || String(key || '').toUpperCase(); }
+function nextSize(cur){
+  const i = SIZE_CYCLE.indexOf(cur);
+  if(i === -1) return '15x18';           // horizontal/unknown drops into the cycle
+  return SIZE_CYCLE[(i + 1) % SIZE_CYCLE.length];
 }
+function cardSizeLabel(d){ return sizeLabelFor(resolvedSize(d, state.settings)); }
 
 // v14.16: per-design decoded-bitmap cache. Decode the blob ONCE; reuse for every
 // size/shirt/side toggle. iOS Safari fails on repeated decodes of large blobs, which
@@ -1112,7 +1120,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.36 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.37 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -1214,11 +1222,11 @@ function initSizeDelegation(){
       const d = state.designs.find(x => x.id === id);
       if(!d){ showToast('Design not found'); return; }
       const cur = resolvedSize(d, state.settings);
-      const next = (cur === '12x16') ? '15x18' : '12x16';
+      const next = nextSize(cur);
       d.sizeOverride = next;
       invalidateCache(d.id);
       await persistDesign(d);
-      const nextLabel = (next === '12x16') ? '12\u00d716' : '15\u00d718';
+      const nextLabel = sizeLabelFor(next);
       const liveCard = document.querySelector(`.card[data-id="${id}"]`);
       if(!liveCard) return;
       const liveLbl = liveCard.querySelector('.card-size-pill .cs-label');
@@ -2971,7 +2979,7 @@ function updateViewerUI(){
   const _szBtn = document.getElementById('viewerSizeBtnLabel');
   if(_szBtn){
     const eff = resolvedSize(d, state.settings);
-    _szBtn.textContent = (eff === '12x16') ? '12\u00d716' : '15\u00d718';
+    _szBtn.textContent = sizeLabelFor(eff);
   }
   $('vaKeep').classList.toggle('on', d.status === 'round1');
   $('vaFix').classList.toggle('on', d.status === 'needs_fixing');
@@ -3215,14 +3223,14 @@ const _el1=document.getElementById('viewerSizeBtn'); if(_el1) _el1.onclick = asy
   const d = state.designs.find(x => x.id === id);
   if(!d){ showToast('Design not found'); return; }
   const cur = resolvedSize(d, state.settings);
-  const next = (cur === '12x16') ? '15x18' : '12x16';
+  const next = nextSize(cur);
   d.sizeOverride = next;
   invalidateCache(d.id);
   await persistDesign(d);
   const lbl = document.getElementById('viewerSizeBtnLabel');
-  if(lbl) lbl.textContent = (next === '12x16') ? '12\u00d716' : '15\u00d718';
+  if(lbl) lbl.textContent = sizeLabelFor(next);
   const gridPillLabel = document.querySelector(`.card[data-id="${d.id}"] .card-size-pill .cs-label`);
-  if(gridPillLabel) gridPillLabel.textContent = (next === '12x16') ? '12\u00d716' : '15\u00d718';
+  if(gridPillLabel) gridPillLabel.textContent = sizeLabelFor(next);
   if(navigator.vibrate) navigator.vibrate(6);
   // v14.14: DIRECT viewer composite regen with visible feedback
   try {
