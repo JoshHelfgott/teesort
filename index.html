@@ -490,6 +490,15 @@
       </div>
       <div style="font-size:11px;margin-top:6px" id="aiKeyStatus"></div>
 
+      <h3 style="margin-top:16px">🎯 Your taste (what Claude judges by)</h3>
+      <div style="font-size:11px;color:rgba(255,255,255,.55);line-height:1.45">Without this, Claude only judges generic craft — legibility, focal point, printability — and would happily rank a clean modern recreation above a real bootleg. Write how you actually see it. Plain words beat rules; Claude is told to treat this as sensibility, not a checklist.</div>
+      <textarea id="tasteBrief" rows="7" placeholder="What makes a design right or wrong to you..." style="width:100%;margin-top:8px;border-radius:10px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);color:#fff;font-size:13px;padding:10px;font-family:inherit;line-height:1.45;-webkit-appearance:none"></textarea>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="ghost" id="tasteSave" style="margin-top:0;flex:1">Save taste</button>
+        <button class="ghost" id="tasteReset" style="margin-top:0;flex:0 0 auto">Reset to draft</button>
+      </div>
+      <div style="font-size:11px;margin-top:6px" id="tasteStatus"></div>
+
       <h3 style="margin-top:16px">⬇ Export</h3>
       <button class="ghost" id="expBundleKeeps" style="margin-top:0">✓ Everything I green-checked</button>
       <button class="ghost" id="expBundleFinalists">⭐ Everything I starred</button>
@@ -811,7 +820,6 @@ try {
       localStorage.setItem('teesort_sizefix_v12', '1');
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(state.settings));
     } catch(e){}
-  try { aiRenderKeyStatus(); } catch(e){}
   }
   const v = parseInt(localStorage.getItem(VIEW_KEY)||'3',10);
   if(v===1||v===2||v===3) state.gridCols = v;
@@ -1104,7 +1112,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.35 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.36 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -2070,6 +2078,7 @@ $('settingsBtn').onclick = openSettings;
 $('closeSettings').onclick = closeSettings;
 $('settingsBg').onclick = closeSettings;
 function openSettings(){
+  try { aiRenderKeyStatus(); tasteRender(); } catch(e){}
   document.querySelectorAll('#segShirt button').forEach(b => b.classList.toggle('on', b.dataset.v === state.settings.shirtMode));
   document.querySelectorAll('#segSize button').forEach(b => b.classList.toggle('on', b.dataset.v === state.settings.size));
   $('knockout').value = state.settings.knockout;
@@ -2549,6 +2558,33 @@ const _foBtn = document.getElementById('faceoffBtn'); if(_foBtn) _foBtn.addEvent
 // written into the app source (which is public) and never leaves the phone except in
 // the request to Anthropic. Claude only advises; you still tap the winner.
 const AI_KEY_STORE = 'teesort_ai_key';
+const AI_TASTE_STORE = 'teesort_ai_taste';
+// A starting draft in the owner's own words. Meant to be edited - it is sensibility,
+// not a spec, and the prompt tells Claude to treat it that way.
+const AI_TASTE_DEFAULT = [
+  "I make Britney bootleg-style tees.",
+  "",
+  "I like designs that feel like they genuinely came out of that era (late 90s / early 2000s) - like you found the shirt, not like someone made it last week.",
+  "",
+  "I like REAL bootleg aesthetics: photo collages, heavy ink, era-correct type and layout, slightly crude in the way actual bootlegs were.",
+  "",
+  "I do NOT want: modern Hot Topic style nostalgia merch, clean 2020s pastiche, or fake-bootleg clipart (lightning bolts, stars, random Y2K sparkle junk slapped on).",
+  "",
+  "Authenticity of feel beats polish. A slightly rough design that feels real beats a clean one that feels staged."
+].join("\n");
+function aiGetTaste(){ try { const v = localStorage.getItem(AI_TASTE_STORE); return v === null ? AI_TASTE_DEFAULT : v; } catch(e){ return AI_TASTE_DEFAULT; } }
+function aiSetTaste(v){ try { localStorage.setItem(AI_TASTE_STORE, v); } catch(e){} }
+// Framed deliberately as sensibility: a checklist makes Claude tick boxes instead of
+// reacting to how the thing actually hits on a shirt.
+function aiTasteBlock(){
+  const t = (aiGetTaste() || '').trim();
+  if(!t) return '';
+  return "\n\nTHIS IS THE OWNER'S TASTE, IN THEIR OWN WORDS:\n" + t
+    + "\n\nTreat that as sensibility, NOT a checklist. Do not score criteria off one by one. "
+    + "Look at the shirt and judge whether it FEELS right to this person - would they be glad they printed it. "
+    + "Where craft and their taste disagree, their taste wins: something slightly rough that feels authentic to them "
+    + "beats something clean that feels staged or like modern nostalgia merch.";
+}
 const AI_MODEL = 'claude-opus-5';
 function aiGetKey(){ try { return localStorage.getItem(AI_KEY_STORE) || ''; } catch(e){ return ''; } }
 function aiSetKey(k){ try { k ? localStorage.setItem(AI_KEY_STORE, k) : localStorage.removeItem(AI_KEY_STORE); } catch(e){} }
@@ -2576,7 +2612,8 @@ async function aiJudgePair(urlA, urlB){
     + 'from across a room, is there one clear focal point, will the detail and text survive printing on '
     + 'fabric, and would someone actually wear it. Cooler artwork does not automatically win if it reads busy. '
     + 'Be decisive and honest - say which is the stronger shirt. '
-    + 'Reply with ONLY raw JSON, no markdown fence: {"winner":"A" or "B","reason":"one sentence, max 22 words"}';
+    + aiTasteBlock()
+    + '\n\nReply with ONLY raw JSON, no markdown fence: {"winner":"A" or "B","reason":"one sentence, max 22 words"}';
   const body = {
     model: AI_MODEL,
     max_tokens: 300,
@@ -2639,7 +2676,8 @@ async function aiRankBatch(ids, onProgress){
       + 'does it read in half a second across a room, is there one clear focal point, will the detail and any text '
       + 'survive DTG printing on fabric, would someone wear it. Busy or low-contrast work should score lower even if '
       + 'the artwork is cool. Use the full 0-10 range and be honest - do not cluster everything around 7. '
-      + 'Reply with ONLY raw JSON, no markdown fence: '
+      + aiTasteBlock()
+      + '\n\nReply with ONLY raw JSON, no markdown fence: '
       + '{"results":[{"n":1,"score":8.5,"reason":"max 16 words"}]} with one entry per design, n matching the label.'});
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method:'POST',
@@ -2791,6 +2829,16 @@ function foRenderAI(){
     btn.disabled = false;
   });
 }
+function tasteRender(){
+  const ta = document.getElementById('tasteBrief'); if(ta) ta.value = aiGetTaste();
+  const st = document.getElementById('tasteStatus');
+  if(st){
+    const custom = (() => { try { return localStorage.getItem(AI_TASTE_STORE) !== null; } catch(e){ return false; } })();
+    st.innerHTML = custom
+      ? '<span style="color:#4bc37e">✓ Claude is judging by your words.</span>'
+      : '<span style="color:rgba(255,255,255,.45)">Using the starting draft — edit it so it sounds like you.</span>';
+  }
+}
 const _aiSave = document.getElementById('aiKeySave');
 if(_aiSave) _aiSave.onclick = () => {
   const i = document.getElementById('aiKeyInput'); if(!i) return;
@@ -2799,7 +2847,18 @@ if(_aiSave) _aiSave.onclick = () => {
   aiSetKey(v); i.value = ''; aiRenderKeyStatus();
   showToast(v ? 'Key saved on this device' : 'Key removed');
 };
+const _tasteSave = document.getElementById('tasteSave');
+if(_tasteSave) _tasteSave.onclick = () => {
+  const ta = document.getElementById('tasteBrief'); if(!ta) return;
+  aiSetTaste(ta.value); tasteRender(); showToast('Taste saved — Claude judges by this now');
+};
+const _tasteReset = document.getElementById('tasteReset');
+if(_tasteReset) _tasteReset.onclick = () => {
+  try { localStorage.removeItem(AI_TASTE_STORE); } catch(e){}
+  tasteRender(); showToast('Back to the starting draft');
+};
 aiRenderKeyStatus();
+tasteRender();
 
 
 // ===== Fullscreen viewer (v3 - simple single-slide) =====
