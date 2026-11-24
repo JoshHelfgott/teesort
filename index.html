@@ -1218,7 +1218,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.52 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.53 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -2268,7 +2268,7 @@ $('archiveRejected').onclick = async () => {
   const rejected = state.designs.filter(d => d.status === 'rejected');
   if(rejected.length === 0){ showToast('Nothing to archive'); return; }
   if(!confirm(`Archive ${rejected.length} rejected design${rejected.length===1?'':'s'}? They'll be hidden from default views but kept in the Archived filter.`)) return;
-  for(const d of rejected){ d.status = 'archived'; await persistDesign(d); }
+  for(const d of rejected){ d.status = 'archived'; persistSoon(d); }
   invalidateCache();
   closeSettings();
   render();
@@ -2307,7 +2307,7 @@ async function exportDesigns(designs, forceAll){
         // Mark these as exported
         for(let j = 0; j < chunk.length; j++){
           const d = toExport[i + j];
-          if(d){ d.exportedAt = Date.now(); await persistDesign(d); }
+          if(d){ d.exportedAt = Date.now(); persistSoon(d); }
         }
         exported += chunk.length;
       } else {
@@ -2672,7 +2672,7 @@ async function foChampion(id){
   const rej = document.getElementById('foRejectRest');
   if(rej) rej.addEventListener('click', async () => {
     if(rej.dataset.confirm !== '1'){ rej.dataset.confirm = '1'; rej.textContent = 'Tap again to reject ' + losers.length; return; }
-    for(const lid of losers){ const ld = state.designs.find(x => x.id === lid); if(ld){ ld.status = 'rejected'; await persistDesign(ld); } }
+    for(const lid of losers){ const ld = state.designs.find(x => x.id === lid); if(ld){ ld.status = 'rejected'; persistSoon(ld); } }
     showToast('Rejected ' + losers.length + ' · recover in the Rejected filter');
     closeFaceoff(); renderFilters(); renderGrid();
   });
@@ -2860,9 +2860,9 @@ async function selApply(fn, label){
   showToast(label.replace('{n}', ids.length));
   selSetMode(false); renderFilters(); renderGrid();
 }
-selWire('selStar',   () => selApply(async d => { d.finalist = true; if(d.status !== 'round1') d.status = 'round1'; await persistDesign(d); }, 'Starred {n}'));
-selWire('selKeep',   () => selApply(async d => { d.status = 'round1'; await persistDesign(d); }, 'Kept {n}'));
-selWire('selReject', () => selApply(async d => { d.status = 'rejected'; await persistDesign(d); }, 'Rejected {n}'));
+selWire('selStar',   () => selApply(async d => { d.finalist = true; if(d.status !== 'round1') d.status = 'round1'; persistSoon(d); }, 'Starred {n}'));
+selWire('selKeep',   () => selApply(async d => { d.status = 'round1'; persistSoon(d); }, 'Kept {n}'));
+selWire('selReject', () => selApply(async d => { d.status = 'rejected'; persistSoon(d); }, 'Rejected {n}'));
 const _foBtn = document.getElementById('faceoffBtn'); if(_foBtn) _foBtn.addEventListener('click', rankEntry);
 
 // ===== v14.34 Claude AI judge =====
@@ -3054,7 +3054,7 @@ async function aiSaveScores(list, model){
   const now = Date.now();
   for(const r of list){
     const d = state.designs.find(x => x.id === r.id);
-    if(d){ d.aiScore = r.score; d.aiReason = r.reason; d.aiRankedAt = now; d.aiModel = model; await persistDesign(d); }
+    if(d){ d.aiScore = r.score; d.aiReason = r.reason; d.aiRankedAt = now; d.aiModel = model; persistSoon(d); }
   }
 }
 function aiHttpError(res, detail){
@@ -3184,15 +3184,9 @@ async function aiProcessQueue(onProgress){
   if(run.err || run.userStop) aiQueueEdit(q => { q.paused = true; });
   if(run.err) throw run.err;
   if(aiQueueGet()) return {stopped: true};
-  // Groups were scored separately; re-judge the leaders side by side so the top of the
-  // list is a real comparison, not several scales stitched together.
-  let results = aiRunResults(last);
-  if(last.all.length > AI_CHUNK && results.length > 2){
-    try {
-      const built = await aiChunkContent(results.slice(0, 8).map(r => r.id), 460);
-      if(built){ await aiSaveScores(aiParse(await aiCallNow(built.content), built.ids), model); results = aiRunResults(last); }
-    } catch(e){ /* keep the merged order */ }
-  }
+  // v14.53: results show the moment the last group lands. (A side-by-side re-check of
+  // the top 8 used to run here - another full Claude call with nothing on screen.)
+  const results = aiRunResults(last);
   return {results, failed: (last.failed || []).length};
 }
 // Closing the sheet pauses: groups already sent still land and are saved.
@@ -3315,15 +3309,11 @@ async function foRenderRanked(results){
   f.ranked = results;
   // v14.41: keep the verdict. Scores used to evaporate when the sheet closed, so you
   // could never sort by them, see the reason later, or act on a ranking tomorrow.
-  const stamp = Date.now();
+  // v14.53: scores were already saved as each group landed - just number them here.
+  // (This used to re-save all N designs, image files included, one at a time first.)
   for(let i = 0; i < results.length; i++){
     const d = state.designs.find(x => x.id === results[i].id);
-    if(!d) continue;
-    d.aiScore = results[i].score;
-    d.aiReason = results[i].reason;
-    d.aiRank = i + 1;
-    d.aiRankedAt = stamp;
-    await persistDesign(d);
+    if(d){ d.aiScore = results[i].score; d.aiReason = results[i].reason; d.aiRank = i + 1; }
   }
   const t = document.getElementById('foTitle'), sub = document.getElementById('foSub');
   if(t) t.textContent = 'Claude’s ranking';
@@ -3372,7 +3362,7 @@ async function foRenderRanked(results){
     for(const r of results.slice(0, 3)){
       const d = state.designs.find(x => x.id === r.id); if(!d) continue;
       d.finalist = true; if(d.status !== 'round1') d.status = 'round1';
-      await persistDesign(d);
+      persistSoon(d);
     }
     list.querySelectorAll('[data-star]').forEach(b => {
       const d = state.designs.find(x => x.id === b.dataset.star);
@@ -3387,7 +3377,7 @@ async function foRenderRanked(results){
     if(rb.dataset.confirm !== '1'){ rb.dataset.confirm = '1'; rb.textContent = 'Tap again to reject ' + bottom.length; return; }
     for(const r of bottom){
       const d = state.designs.find(x => x.id === r.id);
-      if(d){ d.status = 'rejected'; await persistDesign(d); }
+      if(d){ d.status = 'rejected'; persistSoon(d); }
     }
     showToast('Rejected ' + bottom.length + ' \u00b7 recover in the Rejected filter');
     closeFaceoff(); renderFilters(); renderGrid();
@@ -4282,7 +4272,7 @@ const _el5=document.getElementById('rebuildPreviews'); if(_el5) _el5.onclick = (
 const _el6=document.getElementById('clearSizeOverrides'); if(_el6) _el6.onclick = async () => {
   let n = 0;
   for(const d of state.designs){
-    if(d.sizeOverride){ d.sizeOverride = null; n++; await persistDesign(d); }
+    if(d.sizeOverride){ d.sizeOverride = null; n++; persistSoon(d); }
   }
   invalidateCache();
   closeSettings();
@@ -4292,7 +4282,7 @@ const _el6=document.getElementById('clearSizeOverrides'); if(_el6) _el6.onclick 
 const _el7=document.getElementById('clearShirtOverrides'); if(_el7) _el7.onclick = async () => {
   let n = 0;
   for(const d of state.designs){
-    if(d.shirtOverride){ d.shirtOverride = null; n++; await persistDesign(d); }
+    if(d.shirtOverride){ d.shirtOverride = null; n++; persistSoon(d); }
   }
   invalidateCache();
   closeSettings();
