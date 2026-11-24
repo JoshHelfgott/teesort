@@ -1224,7 +1224,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.55 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.56 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -2994,7 +2994,7 @@ async function aiJudgePair(urlA, urlB){
 // Images go up in chunks (the request gets unwieldy past ~12 images), each chunk is
 // scored on the same 0-10 rubric, then chunks are merged by score. With more than one
 // chunk the top of the pile is re-scored together so the final order is apples-to-apples.
-const AI_CHUNK = 12;          // designs per request
+const AI_CHUNK = 20;          // designs per request (one group)
 const AI_PARALLEL = 3;        // requests in flight at once
 const AI_QUEUE_STORE = 'teesort_ai_queue';
 function aiHeaders(){
@@ -3060,11 +3060,11 @@ function aiParse(msg, ids){
     reason: String(r.reason || '').slice(0, 160)
   })).filter(r => r.id);
 }
-async function aiSaveScores(list, model){
+async function aiSaveScores(list, model, round){
   const now = Date.now();
   for(const r of list){
     const d = state.designs.find(x => x.id === r.id);
-    if(d){ d.aiScore = r.score; d.aiReason = r.reason; d.aiRankedAt = now; d.aiModel = model; persistSoon(d); }
+    if(d){ d.aiScore = r.score; d.aiReason = r.reason; d.aiRankedAt = now; d.aiModel = model; d.aiRound = round || 1; persistSoon(d); }
   }
 }
 function aiHttpError(res, detail){
@@ -3117,17 +3117,39 @@ function aiRunResults(q){
   const out = [];
   (q.all || []).forEach(id => {
     const d = state.designs.find(x => x.id === id);
-    if(d && d.aiScore != null && (d.aiRankedAt || 0) >= q.at) out.push({id, score: d.aiScore, reason: d.aiReason || ''});
+    if(d && d.aiScore != null && (d.aiRankedAt || 0) >= q.at) out.push({id, score: d.aiScore, reason: d.aiReason || '', round: d.aiRound || 1});
   });
   return out.sort((a, b) => b.score - a.score);
 }
-// Work through the saved queue, a few groups at a time. The saved queue is the only
-// source of truth (read and written in one synchronous step each time), so designs added
-// mid-run are picked up and nothing is ever overwritten by a stale copy.
-// Network drops (app sent to the background) and "busy" replies are retried after a
-// pause and never count against a design; a design is only given up on after its group
-// fails twice for a real reason.
-function aiQueueEdit(fn){ const q = aiQueueGet(); if(!q) return null; q.failed = q.failed || []; fn(q); aiQueueSet(q); return q; }
+// v14.56: a tournament, so the designs at the top have actually been compared against
+// each other - not just against whoever happened to share their group of 20.
+//   Round 1: every design, in groups of 20 (in library order, so versions of the same
+//            design tend to be judged side by side).
+//   Then:    the top quarter overall PLUS the top 2 of every group move on (a tough
+//            group can't knock out a great design), reshuffled into new groups.
+//   Until:   20 or fewer are left - those are judged all together in one final group.
+// A design's score is always the one from the latest round it played in.
+function aiAdvanceCount(n){ return Math.max(Math.ceil(n / 4), 2 * Math.ceil(n / AI_CHUNK)); }
+function aiPlanImages(n){ let t = n; while(n > AI_CHUNK){ n = Math.min(n - 1, aiAdvanceCount(n)); t += n; } return t; }
+function aiShuffle(a){ a = a.slice(); for(let i = a.length - 1; i > 0; i--){ const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+function aiQueueNorm(q){
+  q.failed = q.failed || [];
+  if(!q.round){ q.round = 1; q.pool = q.all.slice(); q.next = []; q.roundAt = q.at; q.doneImgs = q.all.length - q.left.length; }
+  return q;
+}
+// Round over: pick who moves on, or finish (an empty `left` ends the run).
+function aiNextRound(q){
+  if(q.pool.length <= AI_CHUNK){ q.final = true; return; }        // that was the final group
+  const played = q.pool.map(id => state.designs.find(x => x.id === id))
+    .filter(d => d && d.aiScore != null && d.aiRound === q.round && (d.aiRankedAt || 0) >= q.roundAt)
+    .sort((a, b) => b.aiScore - a.aiScore);
+  const go = new Set(q.next);
+  played.slice(0, Math.ceil(q.pool.length / 4)).forEach(d => go.add(d.id));
+  const next = played.map(d => d.id).filter(id => go.has(id));
+  if(next.length < 2 || next.length >= q.pool.length){ q.final = true; return; }
+  q.round++; q.pool = aiShuffle(next); q.left = q.pool.slice(); q.next = []; q.roundAt = Date.now();
+}
+function aiQueueEdit(fn){ const q = aiQueueGet(); if(!q) return null; aiQueueNorm(q); fn(q); aiQueueSet(q); return q; }
 async function aiProcessQueue(onProgress){
   let last = aiQueueEdit(q => { q.paused = false; });
   if(!last) return {results: [], failed: 0};
@@ -3135,12 +3157,25 @@ async function aiProcessQueue(onProgress){
   const inflight = new Set(), tries = {};
   const model = aiGetModel();
   const report = () => {
-    const q = aiQueueGet(); if(q) last = q;
-    if(onProgress) onProgress(last.all.length - (q ? q.left.length : 0), last.all.length);
+    const q = aiQueueGet(); if(q) last = aiQueueNorm(q);
+    if(!onProgress) return;
+    const left = q ? q.left.length : 0;
+    // Bar: images judged so far vs. the whole tournament (later rounds estimated).
+    const total = last.doneImgs + left + (aiPlanImages(aiAdvanceCount(last.pool.length)) * (last.pool.length > AI_CHUNK ? 1 : 0));
+    onProgress({round: last.round, final: last.pool.length <= AI_CHUNK && last.round > 1,
+      done: last.pool.length - left, of: last.pool.length, frac: total ? last.doneImgs / total : 1});
   };
-  const finish = (scored, failed) => {
+  const finish = (scored, failed, top2) => {
     const gone = new Set(scored.concat(failed));
-    aiQueueEdit(q => { q.left = q.left.filter(id => !gone.has(id)); q.failed.push(...failed); });
+    const q = aiQueueEdit(q => {
+      const before = q.left.length;
+      q.left = q.left.filter(id => !gone.has(id));
+      q.doneImgs += before - q.left.length;
+      q.failed.push(...failed);
+      (top2 || []).forEach(id => { if(!q.next.includes(id)) q.next.push(id); });
+      if(!q.left.length) aiNextRound(q);
+    });
+    if(q) last = q;
   };
   report();
   const worker = async () => {
@@ -3149,18 +3184,23 @@ async function aiProcessQueue(onProgress){
       while(Date.now() < run.waitUntil && !run.stop) await aiSleep(500);
       if(run.stop) return;
       const q = aiQueueGet(); if(!q) return;
-      last = q;
-      const chunk = q.left.filter(id => !inflight.has(id)).slice(0, AI_CHUNK);
-      if(!chunk.length) return;
+      last = aiQueueNorm(q);
+      const round = last.round;
+      const chunk = last.left.filter(id => !inflight.has(id)).slice(0, AI_CHUNK);
+      if(!chunk.length){
+        if(inflight.size){ await aiSleep(300); continue; }   // the round's last group is out; wait for the next round
+        return;
+      }
       chunk.forEach(id => inflight.add(id));
       try {
         const built = await aiChunkContent(chunk, 460);
         if(!built) finish([], chunk);
         else {
           const part = aiParse(await aiCallNow(built.content), built.ids);
-          await aiSaveScores(part, model);
+          await aiSaveScores(part, model, round);
           const got = new Set(part.map(r => r.id));
-          finish(chunk.filter(id => got.has(id)), chunk.filter(id => !got.has(id)));
+          const top2 = part.slice().sort((a, b) => b.score - a.score).slice(0, 2).map(r => r.id);
+          finish(chunk.filter(id => got.has(id)), chunk.filter(id => !got.has(id)), top2);
           run.busy = 0;
         }
       } catch(e){
@@ -3194,10 +3234,8 @@ async function aiProcessQueue(onProgress){
   if(run.err || run.userStop) aiQueueEdit(q => { q.paused = true; });
   if(run.err) throw run.err;
   if(aiQueueGet()) return {stopped: true};
-  // v14.53: results show the moment the last group lands. (A side-by-side re-check of
-  // the top 8 used to run here - another full Claude call with nothing on screen.)
   const results = aiRunResults(last);
-  return {results, failed: (last.failed || []).length};
+  return {results, failed: (last.failed || []).length, rounds: last.round || 1};
 }
 // Closing the sheet pauses: groups already sent still land and are saved.
 function aiPause(){
@@ -3215,7 +3253,7 @@ function aiQueueStatusRender(){
   const q = aiQueueGet();
   if(!q || aiRun){ el.style.display = 'none'; return; }
   el.style.display = 'block';
-  el.textContent = '🤖 ' + q.left.length + ' left to rank · tap to continue';
+  el.textContent = '🤖 Ranking paused · tap to continue';
 }
 function aiOpenPanel(){
   if(!faceoff) faceoff = { pool:[], pending:[], losers:[], round:1, initial:0, a:null, b:null, history:[], all:[] };
@@ -3250,8 +3288,9 @@ function rankEntry(){
   // Add to an unfinished run rather than throwing its remaining designs away.
   let q = aiQueueGet();
   if(!q) q = {all: [], left: [], failed: [], at: Date.now()};
+  aiQueueNorm(q);
   const inAll = new Set(q.all);
-  ids.forEach(id => { if(!inAll.has(id)){ q.all.push(id); q.left.push(id); } });
+  ids.forEach(id => { if(!inAll.has(id)){ q.all.push(id); q.pool.push(id); q.left.push(id); } });
   q.paused = false;
   aiQueueSet(q);
   selSetMode(false);
@@ -3266,16 +3305,21 @@ function aiRenderNeedKey(){
     + '<p>1. Go to <b>console.anthropic.com/settings/keys</b><br>2. <b>Create Key</b> and copy it<br>'
     + '3. TeeSort → <b>Settings</b> → <b>🤖 Claude AI judge</b> → paste → Save</p></div>';
 }
+function aiRoundLabel(p){
+  if(p.final) return 'Final round · ' + p.done + ' / ' + p.of;
+  return (p.round > 1 ? 'Round ' + p.round + ' · ' : '') + p.done + ' / ' + p.of;
+}
 function aiShowPaused(msg){
-  const q = aiQueueGet();
+  const q0 = aiQueueGet(), q = q0 && aiQueueNorm(q0);
   const t = document.getElementById('foTitle'), sub = document.getElementById('foSub');
   if(t) t.textContent = msg ? String(msg) : 'Paused';
   if(sub) sub.textContent = '';
   const body = document.getElementById('foBody');
   if(!q){ body.innerHTML = ''; return; }
-  const done = q.all.length - q.left.length;
-  body.innerHTML = '<div class="fo-choose"><h4>' + done + ' / ' + q.all.length + '</h4>'
-    + '<div class="ai-bar"><i style="width:' + Math.round(done / q.all.length * 100) + '%"></i></div>'
+  const done = q.doneImgs || 0;
+  const p = {round: q.round, final: q.round > 1 && q.pool.length <= AI_CHUNK, done: q.pool.length - q.left.length, of: q.pool.length};
+  body.innerHTML = '<div class="fo-choose"><h4>' + aiRoundLabel(p) + '</h4>'
+    + '<div class="ai-bar"><i style="width:' + Math.round(p.done / Math.max(1, p.of) * 100) + '%"></i></div>'
     + '<button class="fo-opt" id="aiGo"><b>Continue</b></button>'
     + (done ? '<button class="fo-opt" id="aiEnd" style="opacity:.75"><b>Stop · show ranking so far</b></button>' : '')
     + '</div>';
@@ -3296,14 +3340,14 @@ async function aiRunUI(){
   aiQueueStatusRender();
   aiWakeOn();
   try {
-    const r = await aiProcessQueue((done, total) => {
-      const c = document.getElementById('aiCount'); if(c) c.textContent = done + ' / ' + total;
-      const bar = document.getElementById('aiBar'); if(bar) bar.style.width = Math.round(done / total * 100) + '%';
+    const r = await aiProcessQueue(p => {
+      const c = document.getElementById('aiCount'); if(c) c.textContent = aiRoundLabel(p);
+      const bar = document.getElementById('aiBar'); if(bar) bar.style.width = Math.round(Math.min(1, p.frac) * 100) + '%';
     });
     if(r.stopped || !faceoff) return;
     if(!r.results.length) throw new Error('Claude couldn’t score these');
     if(r.failed) showToast(r.failed + ' couldn’t be scored — rank them again');
-    foRenderRanked(r.results);
+    foRenderRanked(r.results, {rounds: r.rounds});
   } catch(err){
     if(!faceoff) return;
     const msg = String((err && err.message) || 'Something went wrong').replace(/[<>]/g,'');
@@ -3332,9 +3376,9 @@ async function foRenderRanked(results, opts){
   const body = document.getElementById('foBody');
   // v14.55: groups of 12 are scored separately, so the leaders were never judged side by
   // side. One tap puts the top 12 in front of Claude together.
-  const canFinal = !opts.final && results.length > AI_CHUNK;
+  const canFinal = false;   // v14.56: the tournament's last round already is the final
   body.innerHTML = (canFinal ? '<button class="fo-opt" id="rkFinal" style="width:100%;margin:0 0 10px"><b>🏆 Final round · top 12 side by side</b></button>' : '')
-    + (opts.final ? '<div class="fo-sub" style="text-align:center;margin:0 0 8px;color:#f3c24b">🏆 Top 12 judged side by side</div>' : '')
+    + (opts.rounds > 1 ? '<div class="fo-sub" style="text-align:center;margin:0 0 8px;color:#f3c24b">🏆 ' + opts.rounds + ' rounds · the top ones were judged against each other</div>' : '')
     + '<div class="fo-ranklist" id="rkList"></div>'
     + '<div class="fo-actions" style="max-width:none;margin-top:4px">'
     + '<button class="fo-btn primary" id="rkStarTop" style="background:#f3c24b;color:#0d0c10">⭐ Star top 3</button>'
