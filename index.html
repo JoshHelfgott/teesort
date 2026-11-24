@@ -408,8 +408,8 @@
         <button class="icon-btn" id="compareBtn" aria-label="Compare mode">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="7" height="16" rx="1"/><rect x="14" y="4" width="7" height="16" rx="1"/></svg><span class="ib-label">Compare</span>
         </button>
-        <button class="icon-btn" id="faceoffBtn" aria-label="Face-off — knock the current view down to one champion">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4v3a2 2 0 0 0 2 2h3M6 20v-3a2 2 0 0 1 2-2h3M11 12h6M18 9l3 3-3 3"/></svg><span class="ib-label">Face-off</span>
+        <button class="icon-btn" id="faceoffBtn" aria-label="Rank designs — let Claude rank them, or pick two at a time">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 4v3a2 2 0 0 0 2 2h3M6 20v-3a2 2 0 0 1 2-2h3M11 12h6M18 9l3 3-3 3"/></svg><span class="ib-label">Rank</span>
         </button>
         <button class="icon-btn" id="viewToggleBtn" aria-label="Grid size"><span class="ib-label">Grid</span></button>
         <button class="icon-btn" id="settingsBtn" aria-label="Settings">
@@ -512,7 +512,7 @@
       <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:6px;line-height:1.4">Clear overrides so the global Size / Shirt Color settings actually apply to all cards.</div>
 
       <h3 style="margin-top:16px">🤖 Claude AI judge</h3>
-      <div style="font-size:11px;color:rgba(255,255,255,.55);line-height:1.45">Lets Claude actually look at two designs in Face-off and say which prints better, and why. Needs an API key from <b>console.anthropic.com</b> (separate from your Claude subscription, costs a few cents per judgement). Stored only on this phone — never uploaded or saved in the app's code.</div>
+      <div style="font-size:11px;color:rgba(255,255,255,.55);line-height:1.45">Lets Claude actually look at two designs in Face-off and say which prints better, and why. You need a free Anthropic account key. Tap <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" style="color:#f3c24b;font-weight:700">console.anthropic.com/settings/keys</a> → <b>Create Key</b> → copy it → paste below. It starts with <b>sk-ant-</b>. Billed per use (~8¢ for 20 designs, ~30¢ for 100), separate from your Claude subscription. Stored only on this phone.</div>
       <div class="aikey-row">
         <input type="password" id="aiKeyInput" placeholder="sk-ant-..." autocomplete="off" autocapitalize="off" spellcheck="false">
         <button id="aiKeySave">Save</button>
@@ -1149,7 +1149,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.38 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.39 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -2512,7 +2512,7 @@ function foRenderChoose(){
     if(!aiGetKey()){
       document.getElementById('foBody').innerHTML =
         '<div class="fo-choose"><h4>Claude needs a key first</h4>' +
-        '<p>Close this, open <b>Settings</b> (gear, top right), find <b>🤖 Claude AI judge</b>, and paste an API key from console.anthropic.com. Then come back here.<br><br>Ranking 100 designs costs about 30 cents.</p>' +
+        '<p>One-time setup:<br><br>1. Go to <b>console.anthropic.com/settings/keys</b><br>2. Tap <b>Create Key</b>, copy it<br>3. Here in TeeSort: <b>Settings</b> (gear, top right) → <b>🤖 Claude AI judge</b> → paste → Save<br><br>Then come back. ~8¢ for 20 designs, ~30¢ for 100.</p>' +
         '<button class="fo-opt" id="foBackChoose"><b>← Back</b><span>Pick two at a time instead.</span></button></div>';
       const bk = document.getElementById('foBackChoose'); if(bk) bk.onclick = foRenderChoose;
       return;
