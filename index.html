@@ -767,13 +767,21 @@ const MOCKUPS = {
 </script>
 <script>
 // ===== IndexedDB =====
-const DB_NAME = 'teesort_v2', DB_VERSION = 1, STORE = 'designs';
+// v14.60: 'designs' holds each design's image (written once, on import). Everything you
+// change afterwards - size, status, stars, scores - goes to the small 'meta' store, so a
+// tap never re-saves a multi-megabyte image. Re-saving the image is what was failing on
+// iPhone ("Couldn't save that change").
+const DB_NAME = 'teesort_v2', DB_VERSION = 2, STORE = 'designs', META = 'meta';
 let _dbPromise = null;
 function openDB(){
   if(_dbPromise) return _dbPromise;
   _dbPromise = new Promise((res,rej)=>{
     const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = e => { const db=e.target.result; if(!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE,{keyPath:'id'}); };
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if(!db.objectStoreNames.contains(STORE)) db.createObjectStore(STORE,{keyPath:'id'});
+      if(!db.objectStoreNames.contains(META)) db.createObjectStore(META,{keyPath:'id'});
+    };
     req.onsuccess = e => {
       const db = e.target.result;
       // Drop cache when iOS / browser closes the connection
@@ -801,10 +809,18 @@ async function withRetry(op){
 async function dbAll(){
   return withRetry(async () => {
     const db = await openDB();
-    return new Promise((r,j)=>{
-      const q = db.transaction(STORE,'readonly').objectStore(STORE).getAll();
+    const getAll = name => new Promise((r,j)=>{
+      const q = db.transaction(name,'readonly').objectStore(name).getAll();
       q.onsuccess = () => r(q.result || []);
       q.onerror = () => j(q.error);
+    });
+    const [recs, metas] = await Promise.all([getAll(STORE), getAll(META)]);
+    const byId = {}; metas.forEach(m => { byId[m.id] = m; });
+    return recs.map(r => {
+      const m = byId[r.id];
+      if(m){ const {blob, ...rest} = m; Object.assign(r, rest); }
+      r._storedBlob = r.blob;            // the image already on disk - never write it again
+      return r;
     });
   });
 }
@@ -821,12 +837,13 @@ async function dbGet(id){
 // v14.52: a write that never answers (iOS can silently drop the connection after the
 // app sat in the background) used to wait forever - and anything waiting on it froze.
 // Give it 8 seconds, then reconnect and try once more.
-function _dbPutOnce(rec){
+function _dbPutOnce(rec, store){
+  store = store || STORE;
   return withRetry(async () => {
     const db = await openDB();
     return new Promise((r,j)=>{
-      const tx = db.transaction(STORE,'readwrite');
-      tx.objectStore(STORE).put(rec);
+      const tx = db.transaction(store,'readwrite');
+      tx.objectStore(store).put(rec);
       tx.oncomplete = () => r();
       tx.onerror = () => j(tx.error);
       tx.onabort = () => j(tx.error || new Error('transaction aborted'));
@@ -836,20 +853,21 @@ function _dbPutOnce(rec){
 function _withTimeout(pr, ms, msg){
   let t; return Promise.race([pr, new Promise((_, j) => { t = setTimeout(() => j(new Error(msg || 'timed out')), ms); })]).finally(() => clearTimeout(t));
 }
-async function dbPut(rec){
-  try { return await _withTimeout(_dbPutOnce(rec), 8000, 'save timed out'); }
+async function dbPut(rec, store){
+  try { return await _withTimeout(_dbPutOnce(rec, store), 8000, 'save timed out'); }
   catch(e){
     if(!/timed out/.test(e.message)) throw e;
     _dbPromise = null;
-    return await _withTimeout(_dbPutOnce(rec), 8000, 'save timed out');
+    return await _withTimeout(_dbPutOnce(rec, store), 8000, 'save timed out');
   }
 }
 async function dbClear(){
   return withRetry(async () => {
     const db = await openDB();
     return new Promise((r,j)=>{
-      const tx = db.transaction(STORE,'readwrite');
+      const tx = db.transaction([STORE, META],'readwrite');
       tx.objectStore(STORE).clear();
+      tx.objectStore(META).clear();
       tx.oncomplete = () => r();
       tx.onerror = () => j(tx.error);
     });
@@ -1073,7 +1091,7 @@ async function getDesignBitmap(d, maxSize){
     // in-memory copy of the file went stale after saving). Drop decoded copies and
     // re-read the original from storage, then try once more before giving up.
     _designBitmapCache.clear();
-    try { const fresh = await dbGet(d.id); if(fresh && fresh.blob) d.blob = fresh.blob; } catch(_){}
+    try { const fresh = await dbGet(d.id); if(fresh && fresh.blob){ d.blob = fresh.blob; d._storedBlob = fresh.blob; } } catch(_){}
     bmp = await blobToBitmap(d.blob, maxSize);
   }
   // Evict oldest if over limit (keep memory bounded on mobile)
@@ -1204,13 +1222,18 @@ const _saveChain = new Map();
 function persistSoon(d){
   const prev = _saveChain.get(d.id) || Promise.resolve();
   const next = prev.catch(() => {}).then(() => persistDesign(d))
-    .catch(e => { console.error('save failed', e); showToast('Couldn\u2019t save that change \u2014 try again'); });
+    .catch(e => { console.error('save failed', e); showToast('Couldn\u2019t save that change (' + String((e && (e.name !== 'Error' ? e.name : e.message)) || 'unknown').slice(0, 40) + ')'); });
   _saveChain.set(d.id, next);
   return next;
 }
 async function persistDesign(d){
-  const {_url, _lastZone, ...rest} = d;
-  await dbPut(rest);
+  const {_url, _lastZone, _storedBlob, ...rest} = d;
+  if(d.blob && d.blob !== d._storedBlob){        // new or replaced image: write it once
+    await dbPut(rest, STORE);
+    d._storedBlob = d.blob;
+  }
+  const {blob, ...meta} = rest;
+  await dbPut(meta, META);
 }
 
 // ===== Render =====
@@ -1224,7 +1247,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.59 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.60 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -2400,6 +2423,7 @@ $('fileInput').addEventListener('change', async e => {
         createdAt: Date.now()
       };
       await dbPut(rec);
+      rec._storedBlob = rec.blob;
       state.designs.unshift(rec);
       done++;
       toast.innerHTML = `<span class="pulse" style="background:#000"></span> Imported ${done} of ${files.length}\u2026`;
