@@ -60,6 +60,9 @@
   .libbtn{flex:0 0 auto;height:34px;padding:0 12px;border-radius:10px;background:rgba(255,255,255,.08);
     border:1px solid rgba(255,255,255,.12);color:#fff;font-size:12px;font-weight:600;font-family:inherit}
   .libbtn.on{background:#fff;color:#000}
+  .ai-badge{position:absolute;bottom:8px;left:8px;z-index:5;background:rgba(243,194,75,.92);color:#0d0c10;
+    font-family:ui-monospace,Menlo,monospace;font-size:11px;font-weight:800;padding:3px 7px;border-radius:7px}
+  .grid.cols-4 .ai-badge{font-size:9px;padding:2px 4px;bottom:4px;left:4px}
   .card.selected{outline:3px solid #f3c24b;outline-offset:-3px;border-radius:14px}
   .card .selmark{position:absolute;top:8px;left:8px;width:26px;height:26px;border-radius:50%;
     background:rgba(0,0,0,.55);border:2px solid #fff;z-index:6;display:none;align-items:center;
@@ -439,6 +442,7 @@
         <option value="name">Name A–Z</option>
         <option value="finalist">Finalists ★</option>
         <option value="edited">Edited first</option>
+        <option value="ai">Claude's score</option>
       </select>
       <button class="libbtn" id="selToggle">Select</button>
       <span class="libcount" id="libCount"></span>
@@ -1157,7 +1161,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.40 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.41 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -1227,6 +1231,11 @@ function getFiltered(){
   if(sort === 'oldest') list.sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0));
   else if(sort === 'name') list.sort((a, b) => (a.name || '').localeCompare(b.name || '', undefined, {numeric:true, sensitivity:'base'}) || byNew(a, b));
   else if(sort === 'finalist') list.sort((a, b) => (b.finalist ? 1 : 0) - (a.finalist ? 1 : 0) || byNew(a, b));
+  else if(sort === 'ai') list.sort((a, b) => {
+    const av = (a.aiScore === undefined) ? -1 : a.aiScore;
+    const bv = (b.aiScore === undefined) ? -1 : b.aiScore;
+    return bv - av || byNew(a, b);          // unscored sink to the bottom
+  });
   else if(sort === 'edited') list.sort((a, b) => (isEdited(b) ? 1 : 0) - (isEdited(a) ? 1 : 0) || byNew(a, b));
   else list.sort(byNew); // newest
   return list;
@@ -1388,6 +1397,7 @@ function cardHtml(d){
           ${(d.status && d.status !== 'inbox') ? `<span class="badge status status-${d.status}"><span class="label">${STATUS_LABELS[d.status]||d.status}</span></span>` : ''}
         </div>
         <div class="selmark">✓</div>
+        ${d.aiScore !== undefined ? `<span class="ai-badge">${Number(d.aiScore).toFixed(1)}</span>` : ''}
         <button class="card-size-pill" data-size-toggle aria-label="Toggle size"><span class="cs-label">${cardSizeLabel(d)}</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3l4 4-4 4M21 7H3M7 21l-4-4 4-4M3 17h18"/></svg></button>
       </div>
       <div class="actions">
@@ -2526,6 +2536,20 @@ function foRenderChoose(){
       const bk = document.getElementById('foBackChoose'); if(bk) bk.onclick = foRenderChoose;
       return;
     }
+    // Big batches cost real money and take real minutes - say so before spending it.
+    const n = f.all.length;
+    if(n > 30 && !f.bigOk){
+      const est = (n * 0.0025).toFixed(2);
+      document.getElementById('foBody').innerHTML =
+        '<div class="fo-choose"><h4>' + n + ' designs</h4>' +
+        '<p>That\u2019s roughly <b>$' + est + '</b> and a few minutes of Claude looking at every one.</p>' +
+        '<button class="fo-opt gold" id="foBigYes"><b>Go ahead</b><span>Rank all ' + n + '.</span></button>' +
+        '<button class="fo-opt" id="foBigNo"><b>\u2190 Back</b><span>Select fewer first.</span></button></div>';
+      const y = document.getElementById('foBigYes');
+      if(y) y.onclick = () => { f.bigOk = true; foRunAIRank(); };
+      const no = document.getElementById('foBigNo'); if(no) no.onclick = foRenderChoose;
+      return;
+    }
     foRunAIRank();
   };
   document.getElementById('foModeManual').onclick = () => foNext();
@@ -2889,9 +2913,21 @@ async function foRunAIRank(){
     const bl = document.getElementById('aiBail'); if(bl) bl.onclick = () => foNext();
   }
 }
-function foRenderRanked(results){
+async function foRenderRanked(results){
   const f = faceoff; if(!f) return;
   f.ranked = results;
+  // v14.41: keep the verdict. Scores used to evaporate when the sheet closed, so you
+  // could never sort by them, see the reason later, or act on a ranking tomorrow.
+  const stamp = Date.now();
+  for(let i = 0; i < results.length; i++){
+    const d = state.designs.find(x => x.id === results[i].id);
+    if(!d) continue;
+    d.aiScore = results[i].score;
+    d.aiReason = results[i].reason;
+    d.aiRank = i + 1;
+    d.aiRankedAt = stamp;
+    await persistDesign(d);
+  }
   const t = document.getElementById('foTitle'), sub = document.getElementById('foSub');
   if(t) t.textContent = 'Claude’s ranking';
   if(sub) sub.textContent = 'Best on top · tap ⭐ to keep · you decide';
@@ -2899,6 +2935,7 @@ function foRenderRanked(results){
   body.innerHTML = '<div class="fo-ranklist" id="rkList"></div>'
     + '<div class="fo-actions" style="max-width:none;margin-top:4px">'
     + '<button class="fo-btn primary" id="rkStarTop" style="background:#f3c24b;color:#0d0c10">⭐ Star top 3</button>'
+    + (results.length > 4 ? '<button class="fo-btn danger" id="rkRejectBottom">✕ Reject bottom ' + Math.floor(results.length / 2) + '</button>' : '')
     + '<button class="fo-btn ghost" id="rkDone">Done</button></div>';
   const list = document.getElementById('rkList');
   results.forEach((r, i) => {
@@ -2938,6 +2975,17 @@ function foRenderRanked(results){
     });
     renderFilters();
     showToast('Starred the top 3');
+  };
+  const rb = document.getElementById('rkRejectBottom');
+  if(rb) rb.onclick = async () => {
+    const bottom = results.slice(Math.ceil(results.length / 2));
+    if(rb.dataset.confirm !== '1'){ rb.dataset.confirm = '1'; rb.textContent = 'Tap again to reject ' + bottom.length; return; }
+    for(const r of bottom){
+      const d = state.designs.find(x => x.id === r.id);
+      if(d){ d.status = 'rejected'; await persistDesign(d); }
+    }
+    showToast('Rejected ' + bottom.length + ' \u00b7 recover in the Rejected filter');
+    closeFaceoff(); renderFilters(); renderGrid();
   };
   document.getElementById('rkDone').onclick = () => { closeFaceoff(); renderFilters(); renderGrid(); };
 }
