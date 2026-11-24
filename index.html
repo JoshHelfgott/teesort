@@ -1224,7 +1224,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.57 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.58 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -3288,7 +3288,7 @@ async function aiProcessQueue(onProgress){
   if(run.err) throw run.err;
   if(aiQueueGet()) return {stopped: true};
   const results = aiRunResults(last);
-  return {results, failed: (last.failed || []).length, rounds: last.round || 1, champs: (last.champs || []).length, cost: aiSpendGet().run || 0};
+  return {results, failed: (last.failed || []).length, rounds: last.round || 1, champs: (last.champs || []).length, champIds: last.champs || [], cost: aiSpendGet().run || 0};
 }
 // Closing the sheet pauses: groups already sent still land and are saved.
 function aiPause(){
@@ -3341,10 +3341,21 @@ function rankEntry(){
   // Add to an unfinished run rather than throwing its remaining designs away.
   let q = aiQueueGet();
   if(!q){
-    q = {all: ids.slice(), left: ids.slice(), failed: [], at: Date.now()};
-    aiQueueNorm(q);
-    q.champs = aiPickChamps(ids);
-    if(ids.length <= AI_CHUNK) aiMakeFinal(q, ids);
+    // v14.58: comparing against your earlier best is a choice, not a surprise.
+    const champs = aiPickChamps(ids);
+    selSetMode(false);
+    aiOpenPanel();
+    if(!aiGetKey()){ aiRenderNeedKey(); return; }
+    if(!champs.length){ aiBeginRun(ids, []); return; }
+    const t = document.getElementById('foTitle'), sub = document.getElementById('foSub');
+    if(t) t.textContent = 'Rank ' + ids.length; if(sub) sub.textContent = '';
+    document.getElementById('foBody').innerHTML = '<div class="fo-choose">'
+      + '<button class="fo-opt" id="rkJust"><b>Just these ' + ids.length + '</b><span>Rank them against each other</span></button>'
+      + '<button class="fo-opt" id="rkWithTop"><b>These ' + ids.length + ' + my top ' + champs.length + '</b><span>See if the new ones beat your best so far</span></button>'
+      + '</div>';
+    document.getElementById('rkJust').onclick = () => aiBeginRun(ids, []);
+    document.getElementById('rkWithTop').onclick = () => aiBeginRun(ids, champs);
+    return;
   } else {
     aiQueueNorm(q);
     const inAll = new Set(q.all);
@@ -3355,6 +3366,15 @@ function rankEntry(){
   selSetMode(false);
   aiOpenPanel();
   if(!aiGetKey()){ aiRenderNeedKey(); return; }
+  aiStart();
+}
+function aiBeginRun(ids, champs){
+  const q = {all: ids.slice(), left: ids.slice(), failed: [], at: Date.now()};
+  aiQueueNorm(q);
+  q.champs = champs.slice();
+  if(ids.length <= AI_CHUNK) aiMakeFinal(q, ids);
+  q.paused = false;
+  aiQueueSet(q);
   aiStart();
 }
 function aiRenderNeedKey(){
@@ -3406,7 +3426,7 @@ async function aiRunUI(){
     if(r.stopped || !faceoff) return;
     if(!r.results.length) throw new Error('Claude couldn’t score these');
     if(r.failed) showToast(r.failed + ' couldn’t be scored — rank them again');
-    foRenderRanked(r.results, {rounds: r.rounds, champs: r.champs, cost: r.cost});
+    foRenderRanked(r.results, {rounds: r.rounds, champs: r.champs, champIds: r.champIds, cost: r.cost});
   } catch(err){
     if(!faceoff) return;
     const msg = String((err && err.message) || 'Something went wrong').replace(/[<>]/g,'');
@@ -3436,15 +3456,17 @@ async function foRenderRanked(results, opts){
   const body = document.getElementById('foBody');
   // v14.55: groups of 12 are scored separately, so the leaders were never judged side by
   // side. One tap puts the top 12 in front of Claude together.
+  const champSet = new Set(opts.champIds || []);
+  const newOnes = results.filter(r => !champSet.has(r.id));    // designs from before are never bulk-rejected here
   const canFinal = false;   // v14.56: the tournament's last round already is the final
   body.innerHTML = (canFinal ? '<button class="fo-opt" id="rkFinal" style="width:100%;margin:0 0 10px"><b>🏆 Final round · top 12 side by side</b></button>' : '')
     + ((opts.rounds > 1 || opts.champs) ? '<div class="fo-sub" style="text-align:center;margin:0 0 8px;color:#f3c24b">🏆 '
         + (opts.rounds > 1 ? opts.rounds + ' rounds' : '1 round')
-        + (opts.champs ? ' · your previous top ' + opts.champs + ' were in the final' : ' · the top ones were judged against each other') + '</div>' : '')
+        + (opts.champs ? ' · ' + opts.champs + ' from before were included (tagged)' : ' · the top ones were judged against each other') + '</div>' : '')
     + '<div class="fo-ranklist" id="rkList"></div>'
     + '<div class="fo-actions" style="max-width:none;margin-top:4px">'
     + '<button class="fo-btn primary" id="rkStarTop" style="background:#f3c24b;color:#0d0c10">⭐ Star top 3</button>'
-    + (results.length > 4 ? '<button class="fo-btn danger" id="rkRejectBottom">✕ Reject bottom ' + Math.floor(results.length / 2) + '</button>' : '')
+    + (newOnes.length > 4 ? '<button class="fo-btn danger" id="rkRejectBottom">✕ Reject bottom ' + Math.floor(newOnes.length / 2) + (champSet.size ? ' new' : '') + '</button>' : '')
     + '<button class="fo-btn ghost" id="rkDone">Done</button></div>';
   const list = document.getElementById('rkList');
   // A big run lists the top 50 here; Done shows every one in score order.
@@ -3456,14 +3478,27 @@ async function foRenderRanked(results, opts){
     row.innerHTML = '<div class="n">' + (i + 1) + '</div>'
       + '<img alt="" data-img="' + r.id + '">'
       + '<div class="info"><div class="nm">' + String(d.name || 'Design').replace(/[<>]/g,'') + '</div>'
-      + '<div class="sc">' + r.score.toFixed(1) + ' / 10</div>'
+      + '<div class="sc">' + r.score.toFixed(1) + ' / 10'
+      + ((opts.champIds || []).includes(r.id) ? ' <span style="font-family:inherit;font-size:10.5px;font-weight:700;color:#0d0c10;background:#9aa0a6;border-radius:5px;padding:1px 6px;margin-left:4px;vertical-align:1px">from before</span>' : '')
+      + '</div>'
       + '<div class="rs">' + String(r.reason || '').replace(/[<>]/g,'') + '</div></div>'
       + '<button class="star' + (d.finalist ? ' on' : '') + '" data-star="' + r.id + '">★</button>';
     list.appendChild(row);
-    composite(d, state.settings, 320).then(u => {
-      const img = list.querySelector('img[data-img="' + r.id + '"]'); if(img) img.src = u;
-    }).catch(() => {});
+    // v14.58: show the grid's picture right away when there is one...
+    const fb = getCardFallbackSrc(r.id);
+    if(fb){ const im = row.querySelector('img'); if(im) im.src = fb; }
   });
+  // ...and draw the rest one at a time. Drawing 30 at once made the iPhone give up and
+  // left most thumbnails black.
+  (async () => {
+    for(const r of results.slice(0, 50)){
+      const img = list.querySelector('img[data-img="' + r.id + '"]');
+      if(!img || !document.body.contains(list)) return;
+      if(img.getAttribute('src')) continue;
+      const d = state.designs.find(x => x.id === r.id); if(!d) continue;
+      try { const u = await _withTimeout(composite(d, state.settings, 320), 15000); if(u) img.src = u; } catch(e){}
+    }
+  })();
   if(results.length > 50){
     const more = document.createElement('div');
     more.className = 'fo-sub'; more.style.cssText = 'text-align:center;padding:10px 0';
@@ -3495,7 +3530,7 @@ async function foRenderRanked(results, opts){
   };
   const rb = document.getElementById('rkRejectBottom');
   if(rb) rb.onclick = async () => {
-    const bottom = results.slice(Math.ceil(results.length / 2));
+    const bottom = newOnes.slice(Math.ceil(newOnes.length / 2));
     if(rb.dataset.confirm !== '1'){ rb.dataset.confirm = '1'; rb.textContent = 'Tap again to reject ' + bottom.length; return; }
     for(const r of bottom){
       const d = state.designs.find(x => x.id === r.id);
