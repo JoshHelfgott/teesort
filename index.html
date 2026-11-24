@@ -802,6 +802,16 @@ async function dbAll(){
     });
   });
 }
+async function dbGet(id){
+  return withRetry(async () => {
+    const db = await openDB();
+    return new Promise((r,j)=>{
+      const q = db.transaction(STORE,'readonly').objectStore(STORE).get(id);
+      q.onsuccess = () => r(q.result || null);
+      q.onerror = () => j(q.error);
+    });
+  });
+}
 async function dbPut(rec){
   return withRetry(async () => {
     const db = await openDB();
@@ -1036,7 +1046,16 @@ const DESIGN_BMP_LIMIT = 30;
 async function getDesignBitmap(d, maxSize){
   const cached = _designBitmapCache.get(d.id);
   if(cached && cached.maxSize >= maxSize) return cached.bmp;
-  const bmp = await blobToBitmap(d.blob, maxSize);
+  let bmp;
+  try { bmp = await blobToBitmap(d.blob, maxSize); }
+  catch(e){
+    // v14.51: iPhone sometimes can't decode a design a second time (low memory, or the
+    // in-memory copy of the file went stale after saving). Drop decoded copies and
+    // re-read the original from storage, then try once more before giving up.
+    _designBitmapCache.clear();
+    try { const fresh = await dbGet(d.id); if(fresh && fresh.blob) d.blob = fresh.blob; } catch(_){}
+    bmp = await blobToBitmap(d.blob, maxSize);
+  }
   // Evict oldest if over limit (keep memory bounded on mobile)
   if(_designBitmapCache.size >= DESIGN_BMP_LIMIT){
     const firstKey = _designBitmapCache.keys().next().value;
@@ -1177,7 +1196,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.50 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.51 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -1292,19 +1311,27 @@ function initSizeDelegation(){
       if(!d){ showToast('Design not found'); return; }
       const cur = resolvedSize(d, state.settings);
       const next = nextSize(cur);
+      const prevOverride = d.sizeOverride;
       d.sizeOverride = next;
-      invalidateCache(d.id);
-      await persistDesign(d);
-      const nextLabel = sizeLabelFor(next);
-      const liveCard = document.querySelector(`.card[data-id="${id}"]`);
-      if(!liveCard) return;
-      const liveLbl = liveCard.querySelector('.card-size-pill .cs-label');
-      if(liveLbl) liveLbl.textContent = nextLabel;
+      let liveCard = document.querySelector(`.card[data-id="${id}"]`);
+      let pillLbl = liveCard && liveCard.querySelector('.card-size-pill .cs-label');
+      if(pillLbl) pillLbl.style.opacity = '.45';         // working on it
       const outputW = state.gridCols === 1 ? 900 : state.gridCols === 2 ? 600 : state.gridCols === 4 ? 320 : 460;
-      let url;
-      try { url = await composite(d, state.settings, outputW); }
-      catch(err){ showToast('Err: '+(err.message||err)); return; }
-      if(!url){ showToast('Composite empty'); return; }
+      let url = null;
+      try { url = await composite(d, state.settings, outputW); } catch(err){ url = null; }
+      if(pillLbl) pillLbl.style.opacity = '';
+      // v14.51: only commit the new size once it has actually been drawn. Before, the label
+      // moved on even when the redraw failed, so the next tap cycled from a size you never saw.
+      if(!url){
+        d.sizeOverride = prevOverride;
+        showToast('Couldn\u2019t redraw that one \u2014 tap again');
+        return;
+      }
+      await persistDesign(d);
+      liveCard = document.querySelector(`.card[data-id="${id}"]`);   // the grid may have re-rendered meanwhile
+      if(!liveCard) return;
+      pillLbl = liveCard.querySelector('.card-size-pill .cs-label');
+      if(pillLbl) pillLbl.textContent = sizeLabelFor(next);
       const wrap = liveCard.querySelector('.card-preview');
       if(!wrap) return;
       await new Promise((res) => {
@@ -3432,6 +3459,8 @@ let viewerState = {
   index: 0,
   view: 'preview',
   zoom: 1,
+  fitZoom: 1,        // v14.51: the default framing - close on the shirt, sleeves trimmed
+  userZoomed: false, // true once you pinch; tap returns to the default framing
   loadToken: 0  // increments on every load so stale loads don't override
 };
 
@@ -3445,6 +3474,20 @@ function getCardFallbackSrc(id){
   return img && img.src ? img.src : '';
 }
 
+// v14.51: open close on the shirt (like pinching in) so you see how it actually wears.
+// Pinch out still shows the whole mockup. Never zooms past what fits on screen.
+const VIEW_CLOSE = 1.35;
+function viewerFit(){
+  if(viewerState.userZoomed) return;
+  const img = $('vImg'), tr = $('viewerTrack');
+  let z = 1;
+  if(viewerState.view === 'preview' && img && tr && img.clientHeight){
+    z = Math.max(1, Math.min(VIEW_CLOSE, tr.clientHeight / img.clientHeight));
+  }
+  viewerState.fitZoom = z;
+  viewerState.zoom = z; viewerState.panX = 0; viewerState.panY = 0;
+  applyZoom(false);
+}
 function openViewer(startId){
   viewerState.ids = getFilteredIds();
   if(viewerState.ids.length === 0) return;
@@ -3455,6 +3498,8 @@ function openViewer(startId){
   viewerState.panY = 0;
   const track = $('viewerTrack');
   track.innerHTML = '<div class="viewer-slide current" id="vSlide"><img id="vImg" alt=""><div class="skel" id="vSkel"></div></div>';
+  viewerState.userZoomed = false;
+  $('vImg').addEventListener('load', viewerFit);
   const fallback = getCardFallbackSrc(startId);
   if(fallback) $('vImg').src = fallback;
   $('viewer').classList.add('open');
@@ -3555,13 +3600,14 @@ function gotoSlide(direction){
     return;
   }
   viewerState.index = newIdx;
-  viewerState.zoom = 1;
+  viewerState.userZoomed = false;
+  viewerState.zoom = viewerState.view === 'preview' ? viewerState.fitZoom : 1;
   viewerState.panX = 0;
   viewerState.panY = 0;
   const img = $('vImg');
   if(img){
     img.style.transition = 'none';
-    img.style.transform = 'scale(1)';
+    img.style.transform = 'scale(' + viewerState.zoom + ')';
   }
   const nextId = viewerState.ids[newIdx];
   const fallback = getCardFallbackSrc(nextId);
@@ -3635,13 +3681,14 @@ vTrack.addEventListener('touchmove', e => {
     let z = vPinchStartZoom * (d / vPinchStartDist);
     z = Math.max(1, Math.min(4, z));
     viewerState.zoom = z;
+    viewerState.userZoomed = true;
     applyZoom(true);
     clearTimeout(vTapTimer);
     return;
   }
   if(vPinching || !e.touches[0]) return;
-  if(viewerState.zoom > 1.05){
-    // Pan instead of swipe when zoomed
+  if(viewerState.zoom > viewerState.fitZoom + 0.05){
+    // Pan instead of swipe when zoomed in past the default framing
     const dx = e.touches[0].clientX - vSwipeStartX;
     const dy = e.touches[0].clientY - vSwipeStartY;
     viewerState.panX = (viewerState._panStartX || 0) + dx;
@@ -3701,13 +3748,13 @@ vTrack.addEventListener('click', e => {
     vSwipeAxis = null;
     return;
   }
-  if(viewerState.zoom > 1.05){
-    viewerState.zoom = 1;
-    viewerState.panX = 0;
-    viewerState.panY = 0;
-    applyZoom(true);
+  if(viewerState.userZoomed && Math.abs(viewerState.zoom - viewerState.fitZoom) > 0.05){
+    // Tap after pinching = back to the default framing
+    viewerState.userZoomed = false;
+    viewerFit();
     return;
   }
+  viewerState.userZoomed = false;
   viewerState.view = viewerState.view === 'preview' ? 'original' : 'preview';
   loadCurrent();
   updateViewerUI();
@@ -3774,46 +3821,35 @@ function showFallbackImagePreview(url, filename){
     <img src="${url}" style="max-width:100%;max-height:60vh;object-fit:contain;border-radius:8px;-webkit-touch-callout:default;-webkit-user-select:auto;user-select:auto">
     <button style="margin-top:16px;padding:12px 24px;border-radius:12px;background:rgba(255,255,255,.15);color:#fff;font-weight:600;border:0" onclick="document.getElementById('imgFallback').remove()">Done</button>`;
 }
+// v14.51: same rule as the grid pill - the size only changes once the new picture is
+// drawn, and drawing goes through loadCurrent() so an older, slower redraw can never land
+// on top of a newer one.
+let _viewerSizeBusy = false;
 const _el1=document.getElementById('viewerSizeBtn'); if(_el1) _el1.onclick = async () => {
+  if(_viewerSizeBusy) return;
   const id = viewerState.ids[viewerState.index];
-  if(!id){ showToast('No viewer id'); return; }
-  const d = state.designs.find(x => x.id === id);
-  if(!d){ showToast('Design not found'); return; }
-  const cur = resolvedSize(d, state.settings);
-  const next = nextSize(cur);
-  d.sizeOverride = next;
-  invalidateCache(d.id);
-  await persistDesign(d);
+  const d = id && state.designs.find(x => x.id === id);
+  if(!d) return;
+  _viewerSizeBusy = true;
   const lbl = document.getElementById('viewerSizeBtnLabel');
+  if(lbl) lbl.style.opacity = '.45';
+  const prevOverride = d.sizeOverride;
+  const next = nextSize(resolvedSize(d, state.settings));
+  d.sizeOverride = next;
+  let url = null;
+  try { url = await composite(d, state.settings, 1100); } catch(e){ url = null; }
+  if(lbl) lbl.style.opacity = '';
+  _viewerSizeBusy = false;
+  if(!url){ d.sizeOverride = prevOverride; showToast('Couldn\u2019t redraw that one \u2014 tap again'); return; }
+  await persistDesign(d);
   if(lbl) lbl.textContent = sizeLabelFor(next);
-  const gridPillLabel = document.querySelector(`.card[data-id="${d.id}"] .card-size-pill .cs-label`);
-  if(gridPillLabel) gridPillLabel.textContent = sizeLabelFor(next);
   if(navigator.vibrate) navigator.vibrate(6);
-  // v14.14: DIRECT viewer composite regen with visible feedback
-  try {
-    const url = await composite(d, state.settings, 1100);
-    if(!url){ showToast('Composite empty'); return; }
-    const vImg = document.getElementById('vImg');
-    if(!vImg){ showToast('No vImg'); return; }
-    const pre = new Image();
-    pre.onload = () => {
-      vImg.src = pre.src;
-      const skel = document.getElementById('vSkel');
-      if(skel) skel.style.display = 'none';
-      showToast(`Size: ${next}`);
-    };
-    pre.onerror = () => showToast('Viewer preload err');
-    pre.src = url;
-  } catch(err){
-    console.error('viewer size err', err);
-    showToast('Err: ' + (err.message || err));
-  }
-  // Grid card refresh: only after we succeed above
-  setTimeout(() => {
-    updateCardShirtBadgeInPlace(d);
-    invalidateCache(d.id);
-    renderCardComposite(d.id);
-  }, 500);
+  if(viewerState.view !== 'preview'){ viewerState.view = 'preview'; updateViewerUI(); }
+  loadCurrent();                       // picks the just-drawn picture straight from the cache
+  const gridLbl = document.querySelector(`.card[data-id="${d.id}"] .card-size-pill .cs-label`);
+  if(gridLbl) gridLbl.textContent = sizeLabelFor(next);
+  updateCardShirtBadgeInPlace(d);
+  renderCardComposite(d.id);
 };
 $('viewerShare').onclick = () => {
   document.getElementById('shareSheet').classList.add('open');
