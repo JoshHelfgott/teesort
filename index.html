@@ -812,7 +812,10 @@ async function dbGet(id){
     });
   });
 }
-async function dbPut(rec){
+// v14.52: a write that never answers (iOS can silently drop the connection after the
+// app sat in the background) used to wait forever - and anything waiting on it froze.
+// Give it 8 seconds, then reconnect and try once more.
+function _dbPutOnce(rec){
   return withRetry(async () => {
     const db = await openDB();
     return new Promise((r,j)=>{
@@ -823,6 +826,17 @@ async function dbPut(rec){
       tx.onabort = () => j(tx.error || new Error('transaction aborted'));
     });
   });
+}
+function _withTimeout(pr, ms, msg){
+  let t; return Promise.race([pr, new Promise((_, j) => { t = setTimeout(() => j(new Error(msg || 'timed out')), ms); })]).finally(() => clearTimeout(t));
+}
+async function dbPut(rec){
+  try { return await _withTimeout(_dbPutOnce(rec), 8000, 'save timed out'); }
+  catch(e){
+    if(!/timed out/.test(e.message)) throw e;
+    _dbPromise = null;
+    return await _withTimeout(_dbPutOnce(rec), 8000, 'save timed out');
+  }
 }
 async function dbClear(){
   return withRetry(async () => {
@@ -1180,6 +1194,14 @@ function isEdited(d){
   return !!(d.shirtOverride || d.sizeOverride || d.vOffsetOverride || d.knockoutOverride != null);
 }
 
+const _saveChain = new Map();
+function persistSoon(d){
+  const prev = _saveChain.get(d.id) || Promise.resolve();
+  const next = prev.catch(() => {}).then(() => persistDesign(d))
+    .catch(e => { console.error('save failed', e); showToast('Couldn\u2019t save that change \u2014 try again'); });
+  _saveChain.set(d.id, next);
+  return next;
+}
 async function persistDesign(d){
   const {_url, _lastZone, ...rest} = d;
   await dbPut(rest);
@@ -1196,7 +1218,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.51 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.52 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -1318,7 +1340,7 @@ function initSizeDelegation(){
       if(pillLbl) pillLbl.style.opacity = '.45';         // working on it
       const outputW = state.gridCols === 1 ? 900 : state.gridCols === 2 ? 600 : state.gridCols === 4 ? 320 : 460;
       let url = null;
-      try { url = await composite(d, state.settings, outputW); } catch(err){ url = null; }
+      try { url = await _withTimeout(composite(d, state.settings, outputW), 20000); } catch(err){ url = null; }
       if(pillLbl) pillLbl.style.opacity = '';
       // v14.51: only commit the new size once it has actually been drawn. Before, the label
       // moved on even when the redraw failed, so the next tap cycled from a size you never saw.
@@ -1327,7 +1349,7 @@ function initSizeDelegation(){
         showToast('Couldn\u2019t redraw that one \u2014 tap again');
         return;
       }
-      await persistDesign(d);
+      persistSoon(d);
       liveCard = document.querySelector(`.card[data-id="${id}"]`);   // the grid may have re-rendered meanwhile
       if(!liveCard) return;
       pillLbl = liveCard.querySelector('.card-size-pill .cs-label');
@@ -1773,7 +1795,7 @@ document.querySelectorAll('#cardSizeSeg button').forEach(b => {
     if(!d) return;
     d.sizeOverride = (d.sizeOverride === b.dataset.v) ? null : b.dataset.v;
     invalidateCache(d.id);
-    await persistDesign(d);
+    persistSoon(d);
     document.querySelectorAll('#cardSizeSeg button').forEach(x => x.classList.toggle('on', x.dataset.v === d.sizeOverride));
     updateCardShirtBadgeInPlace(d);
     refreshCardActionsSub();
@@ -2009,7 +2031,7 @@ document.querySelectorAll('#dSizeSeg button').forEach(b => {
     if(!d) return;
     d.sizeOverride = (d.sizeOverride === b.dataset.v) ? null : b.dataset.v;
     invalidateCache(d.id);
-    await persistDesign(d);
+    persistSoon(d);
     document.querySelectorAll('#dSizeSeg button').forEach(x => x.classList.toggle('on', x.dataset.v === d.sizeOverride));
     renderDetailCanvas();
   };
@@ -3837,11 +3859,11 @@ const _el1=document.getElementById('viewerSizeBtn'); if(_el1) _el1.onclick = asy
   const next = nextSize(resolvedSize(d, state.settings));
   d.sizeOverride = next;
   let url = null;
-  try { url = await composite(d, state.settings, 1100); } catch(e){ url = null; }
+  try { url = await _withTimeout(composite(d, state.settings, 1100), 20000); } catch(e){ url = null; }
   if(lbl) lbl.style.opacity = '';
   _viewerSizeBusy = false;
   if(!url){ d.sizeOverride = prevOverride; showToast('Couldn\u2019t redraw that one \u2014 tap again'); return; }
-  await persistDesign(d);
+  persistSoon(d);
   if(lbl) lbl.textContent = sizeLabelFor(next);
   if(navigator.vibrate) navigator.vibrate(6);
   if(viewerState.view !== 'preview'){ viewerState.view = 'preview'; updateViewerUI(); }
