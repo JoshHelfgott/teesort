@@ -1224,7 +1224,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.56 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.57 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -2926,6 +2926,34 @@ function aiEstimate(n, background){
   const c = n * (AI_MODELS[aiGetModel()] || AI_MODELS['claude-opus-5-5']).per * (background ? 0.5 : 1);
   return c < 0.01 ? '<1¢' : '$' + c.toFixed(2);
 }
+// v14.57: real spend, not estimates. Every reply from Claude reports exactly how many
+// tokens it used (thinking counts as output); multiply by the published per-million
+// price of the model that actually answered. Prices: Anthropic's list, Nov 2026.
+const AI_PRICES = {
+  'claude-opus-5-5': [4, 20], 'claude-sonnet-5-5': [2, 10], 'claude-haiku-5-5': [0.10, 0.50],
+  'claude-opus-5': [5, 25], 'claude-opus-4-8': [5, 25], 'claude-sonnet-5': [2, 10]
+};
+const AI_SPEND_STORE = 'teesort_ai_spend';     // {total, runAt, run}
+function aiSpendGet(){ try { return JSON.parse(localStorage.getItem(AI_SPEND_STORE) || '{}'); } catch(e){ return {}; } }
+function aiSpendAdd(msg){
+  const u = msg && msg.usage; if(!u) return;
+  const pr = AI_PRICES[msg.model] || AI_PRICES[aiGetModel()] || AI_PRICES['claude-opus-5-5'];
+  const inTok = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) * 1.25 + (u.cache_read_input_tokens || 0) * 0.1;
+  const usd = (inTok * pr[0] + (u.output_tokens || 0) * pr[1]) / 1e6;
+  const sp = aiSpendGet();
+  sp.total = (sp.total || 0) + usd;
+  sp.run = (sp.run || 0) + usd;
+  try { localStorage.setItem(AI_SPEND_STORE, JSON.stringify(sp)); } catch(e){}
+}
+function aiSpendStartRun(at){
+  const sp = aiSpendGet();
+  if(sp.runAt !== at){ sp.runAt = at; sp.run = 0; try { localStorage.setItem(AI_SPEND_STORE, JSON.stringify(sp)); } catch(e){} }
+}
+function aiMoney(usd){
+  if(!usd) return '$0';
+  if(usd < 0.01) return 'under 1\u00a2';
+  return '$' + usd.toFixed(2);
+}
 function aiGetKey(){ try { return localStorage.getItem(AI_KEY_STORE) || ''; } catch(e){ return ''; } }
 function aiSetKey(k){ try { k ? localStorage.setItem(AI_KEY_STORE, k) : localStorage.removeItem(AI_KEY_STORE); } catch(e){} }
 function aiRenderKeyStatus(){
@@ -2982,6 +3010,7 @@ async function aiJudgePair(urlA, urlB){
     throw new Error('Claude error ' + res.status + (detail ? ': ' + detail.slice(0,80) : ''));
   }
   const j = await res.json();
+  aiSpendAdd(j);
   if(j.stop_reason === 'refusal') throw new Error('Claude declined to judge these two');
   const txt = (j.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n');
   const m = txt.match(/\{[\s\S]*\}/);
@@ -3107,7 +3136,9 @@ async function aiCallNow(content){
     let detail = ''; try { const j = await res.json(); detail = (j.error && j.error.message) || ''; } catch(e){}
     throw aiHttpError(res, detail);
   }
-  return await res.json();
+  const msg = await res.json();
+  aiSpendAdd(msg);
+  return msg;
 }
 const aiSleep = ms => new Promise(r => setTimeout(r, ms));
 let aiRun = null, aiLastVisibleAt = 0;
@@ -3135,11 +3166,13 @@ function aiShuffle(a){ a = a.slice(); for(let i = a.length - 1; i > 0; i--){ con
 function aiQueueNorm(q){
   q.failed = q.failed || [];
   if(!q.round){ q.round = 1; q.pool = q.all.slice(); q.next = []; q.roundAt = q.at; q.doneImgs = q.all.length - q.left.length; }
+  if(q.isFinal === undefined) q.isFinal = q.pool.length <= AI_CHUNK;
+  q.champs = q.champs || [];
   return q;
 }
 // Round over: pick who moves on, or finish (an empty `left` ends the run).
 function aiNextRound(q){
-  if(q.pool.length <= AI_CHUNK){ q.final = true; return; }        // that was the final group
+  if(q.isFinal){ q.final = true; return; }                       // that was the final group
   const played = q.pool.map(id => state.designs.find(x => x.id === id))
     .filter(d => d && d.aiScore != null && d.aiRound === q.round && (d.aiRankedAt || 0) >= q.roundAt)
     .sort((a, b) => b.aiScore - a.aiScore);
@@ -3147,12 +3180,31 @@ function aiNextRound(q){
   played.slice(0, Math.ceil(q.pool.length / 4)).forEach(d => go.add(d.id));
   const next = played.map(d => d.id).filter(id => go.has(id));
   if(next.length < 2 || next.length >= q.pool.length){ q.final = true; return; }
-  q.round++; q.pool = aiShuffle(next); q.left = q.pool.slice(); q.next = []; q.roundAt = Date.now();
+  q.round++; q.next = []; q.roundAt = Date.now();
+  if(next.length <= AI_CHUNK){ aiMakeFinal(q, next); return; }
+  q.pool = aiShuffle(next); q.left = q.pool.slice(); q.isFinal = false;
+}
+// v14.57: the final group = this run's winners + your previous top 10 ("champions"),
+// so new designs are measured against what you already had - without re-judging
+// everything from before. Anything below your old #10 already lost to it.
+const AI_CHAMPS = 10;
+function aiMakeFinal(q, ids){
+  const pool = ids.slice();
+  (q.champs || []).forEach(id => { if(!pool.includes(id)) pool.push(id); });
+  q.champs.forEach(id => { if(!q.all.includes(id)) q.all.push(id); });
+  q.pool = aiShuffle(pool); q.left = q.pool.slice(); q.isFinal = true;
+}
+function aiPickChamps(excludeIds){
+  const ex = new Set(excludeIds);
+  return state.designs
+    .filter(d => !ex.has(d.id) && d.blob && d.aiScore != null && d.status !== 'rejected' && d.status !== 'archived')
+    .sort((a, b) => b.aiScore - a.aiScore).slice(0, AI_CHAMPS).map(d => d.id);
 }
 function aiQueueEdit(fn){ const q = aiQueueGet(); if(!q) return null; aiQueueNorm(q); fn(q); aiQueueSet(q); return q; }
 async function aiProcessQueue(onProgress){
   let last = aiQueueEdit(q => { q.paused = false; });
   if(!last) return {results: [], failed: 0};
+  aiSpendStartRun(last.at);
   const run = aiRun = {stop: false, userStop: false, err: null, waitUntil: 0, busy: 0};
   const inflight = new Set(), tries = {};
   const model = aiGetModel();
@@ -3161,8 +3213,8 @@ async function aiProcessQueue(onProgress){
     if(!onProgress) return;
     const left = q ? q.left.length : 0;
     // Bar: images judged so far vs. the whole tournament (later rounds estimated).
-    const total = last.doneImgs + left + (aiPlanImages(aiAdvanceCount(last.pool.length)) * (last.pool.length > AI_CHUNK ? 1 : 0));
-    onProgress({round: last.round, final: last.pool.length <= AI_CHUNK && last.round > 1,
+    const total = last.doneImgs + left + (last.isFinal ? 0 : aiPlanImages(aiAdvanceCount(last.pool.length)) + last.champs.length);
+    onProgress({round: last.round, final: last.isFinal && (last.round > 1 || last.champs.length > 0),
       done: last.pool.length - left, of: last.pool.length, frac: total ? last.doneImgs / total : 1});
   };
   const finish = (scored, failed, top2) => {
@@ -3186,7 +3238,8 @@ async function aiProcessQueue(onProgress){
       const q = aiQueueGet(); if(!q) return;
       last = aiQueueNorm(q);
       const round = last.round;
-      const chunk = last.left.filter(id => !inflight.has(id)).slice(0, AI_CHUNK);
+      // The final is one group (winners + champions, up to 30) so all of it is judged side by side.
+      const chunk = last.left.filter(id => !inflight.has(id)).slice(0, last.isFinal ? 30 : AI_CHUNK);
       if(!chunk.length){
         if(inflight.size){ await aiSleep(300); continue; }   // the round's last group is out; wait for the next round
         return;
@@ -3235,7 +3288,7 @@ async function aiProcessQueue(onProgress){
   if(run.err) throw run.err;
   if(aiQueueGet()) return {stopped: true};
   const results = aiRunResults(last);
-  return {results, failed: (last.failed || []).length, rounds: last.round || 1};
+  return {results, failed: (last.failed || []).length, rounds: last.round || 1, champs: (last.champs || []).length, cost: aiSpendGet().run || 0};
 }
 // Closing the sheet pauses: groups already sent still land and are saved.
 function aiPause(){
@@ -3287,10 +3340,16 @@ function rankEntry(){
   if(ids.length < 2){ showToast('Select at least 2 designs'); return; }
   // Add to an unfinished run rather than throwing its remaining designs away.
   let q = aiQueueGet();
-  if(!q) q = {all: [], left: [], failed: [], at: Date.now()};
-  aiQueueNorm(q);
-  const inAll = new Set(q.all);
-  ids.forEach(id => { if(!inAll.has(id)){ q.all.push(id); q.pool.push(id); q.left.push(id); } });
+  if(!q){
+    q = {all: ids.slice(), left: ids.slice(), failed: [], at: Date.now()};
+    aiQueueNorm(q);
+    q.champs = aiPickChamps(ids);
+    if(ids.length <= AI_CHUNK) aiMakeFinal(q, ids);
+  } else {
+    aiQueueNorm(q);
+    const inAll = new Set(q.all);
+    ids.forEach(id => { if(!inAll.has(id)){ q.all.push(id); q.pool.push(id); q.left.push(id); } });
+  }
   q.paused = false;
   aiQueueSet(q);
   selSetMode(false);
@@ -3317,7 +3376,7 @@ function aiShowPaused(msg){
   const body = document.getElementById('foBody');
   if(!q){ body.innerHTML = ''; return; }
   const done = q.doneImgs || 0;
-  const p = {round: q.round, final: q.round > 1 && q.pool.length <= AI_CHUNK, done: q.pool.length - q.left.length, of: q.pool.length};
+  const p = {round: q.round, final: q.isFinal && (q.round > 1 || q.champs.length > 0), done: q.pool.length - q.left.length, of: q.pool.length};
   body.innerHTML = '<div class="fo-choose"><h4>' + aiRoundLabel(p) + '</h4>'
     + '<div class="ai-bar"><i style="width:' + Math.round(p.done / Math.max(1, p.of) * 100) + '%"></i></div>'
     + '<button class="fo-opt" id="aiGo"><b>Continue</b></button>'
@@ -3347,7 +3406,7 @@ async function aiRunUI(){
     if(r.stopped || !faceoff) return;
     if(!r.results.length) throw new Error('Claude couldn’t score these');
     if(r.failed) showToast(r.failed + ' couldn’t be scored — rank them again');
-    foRenderRanked(r.results, {rounds: r.rounds});
+    foRenderRanked(r.results, {rounds: r.rounds, champs: r.champs, cost: r.cost});
   } catch(err){
     if(!faceoff) return;
     const msg = String((err && err.message) || 'Something went wrong').replace(/[<>]/g,'');
@@ -3372,13 +3431,16 @@ async function foRenderRanked(results, opts){
   }
   const t = document.getElementById('foTitle'), sub = document.getElementById('foSub');
   if(t) t.textContent = 'Claude’s ranking';
-  if(sub) sub.textContent = 'Best on top · tap ⭐ to keep · you decide';
+  if(sub) sub.textContent = 'Best on top · tap ⭐ to keep · you decide'
+    + (opts.cost != null ? ' · this run cost ' + aiMoney(opts.cost) : '');
   const body = document.getElementById('foBody');
   // v14.55: groups of 12 are scored separately, so the leaders were never judged side by
   // side. One tap puts the top 12 in front of Claude together.
   const canFinal = false;   // v14.56: the tournament's last round already is the final
   body.innerHTML = (canFinal ? '<button class="fo-opt" id="rkFinal" style="width:100%;margin:0 0 10px"><b>🏆 Final round · top 12 side by side</b></button>' : '')
-    + (opts.rounds > 1 ? '<div class="fo-sub" style="text-align:center;margin:0 0 8px;color:#f3c24b">🏆 ' + opts.rounds + ' rounds · the top ones were judged against each other</div>' : '')
+    + ((opts.rounds > 1 || opts.champs) ? '<div class="fo-sub" style="text-align:center;margin:0 0 8px;color:#f3c24b">🏆 '
+        + (opts.rounds > 1 ? opts.rounds + ' rounds' : '1 round')
+        + (opts.champs ? ' · your previous top ' + opts.champs + ' were in the final' : ' · the top ones were judged against each other') + '</div>' : '')
     + '<div class="fo-ranklist" id="rkList"></div>'
     + '<div class="fo-actions" style="max-width:none;margin-top:4px">'
     + '<button class="fo-btn primary" id="rkStarTop" style="background:#f3c24b;color:#0d0c10">⭐ Star top 3</button>'
@@ -3506,7 +3568,9 @@ function aiModelRender(){
   const sel = document.getElementById('aiModelSel');
   if(sel) sel.value = aiGetModel();
   const c = document.getElementById('aiModelCost');
-  if(c) c.innerHTML = 'Your real spend shows at console.anthropic.com \u2192 Usage.';
+  const tot = aiSpendGet().total || 0;
+  if(c) c.innerHTML = (tot ? 'Spent through TeeSort on this phone: <b>' + aiMoney(tot) + '</b> (from Claude\u2019s own token counts). ' : '')
+    + 'Full history at console.anthropic.com \u2192 Usage.';
 }
 const _aiMdl = document.getElementById('aiModelSel');
 if(_aiMdl) _aiMdl.onchange = () => { aiSetModel(_aiMdl.value); aiModelRender(); showToast('Using ' + (AI_MODELS[aiGetModel()]||{}).label); };
