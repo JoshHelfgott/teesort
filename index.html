@@ -530,6 +530,12 @@
         <button id="aiKeySave">Save</button>
       </div>
       <div style="font-size:11px;margin-top:6px" id="aiKeyStatus"></div>
+      <select class="libsort" id="aiModelSel" style="width:100%;height:40px;margin-top:10px">
+        <option value="claude-opus-5-5">Opus 5.5 — best judgment</option>
+        <option value="claude-sonnet-5-5">Sonnet 5.5 — good, ~2x cheaper</option>
+        <option value="claude-haiku-5-5">Haiku 5.5 — fast, ~40x cheaper</option>
+      </select>
+      <div style="font-size:11px;color:rgba(255,255,255,.5);margin-top:6px" id="aiModelCost"></div>
 
       <h3 style="margin-top:16px">🎯 Your taste (what Claude judges by)</h3>
       <div style="font-size:11px;color:rgba(255,255,255,.55);line-height:1.45">Without this, Claude only judges generic craft — legibility, focal point, printability — and would happily rank a clean modern recreation above a real bootleg. Write how you actually see it. Plain words beat rules; Claude is told to treat this as sensibility, not a checklist.</div>
@@ -566,6 +572,7 @@
     <div>
       <div class="sheet-title" id="cardActionsTitle">Design</div>
       <div class="sheet-sub" id="cardActionsSub">Quick override</div>
+      <div id="cardActionsAI" style="font-size:12px;color:rgba(255,255,255,.72);margin-top:6px;line-height:1.4"></div>
     </div>
     <button class="icon-btn" id="closeCardActions" aria-label="Close">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18M6 6l12 12"/></svg>
@@ -1161,7 +1168,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.41 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.42 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -1703,6 +1710,10 @@ function openCardActions(id){
   $('cardActionsTitle').textContent = d.name || 'Design';
   const sideLabel = (d.side || 'front') === 'back' ? 'Back' : 'Front';
   $('cardActionsSub').textContent = `${sideLabel} \u00b7 ${ZONES_FRONT[resolvedSize(d, state.settings)]?.label || ''} \u00b7 ${d.shirtOverride || (state.settings.shirtMode==='auto' ? d.resolvedShirt : state.settings.shirtMode)}`;
+  const _ar = document.getElementById('cardActionsAI');
+  if(_ar) _ar.innerHTML = (d.aiScore !== undefined)
+    ? '<b style="color:#f3c24b">Claude ' + Number(d.aiScore).toFixed(1) + '/10</b> \u00b7 ' + String(d.aiReason || '').replace(/[<>]/g,'')
+    : '';
   document.querySelectorAll('#cardSizeSeg button').forEach(b => b.classList.toggle('on', b.dataset.v === d.sizeOverride));
   document.querySelectorAll('#cardShirtSeg button').forEach(b => b.classList.toggle('on', b.dataset.v === d.shirtOverride));
   document.querySelectorAll('#cardSideSeg button').forEach(b => b.classList.toggle('on', b.dataset.v === (d.side || 'front')));
@@ -2144,7 +2155,7 @@ $('settingsBtn').onclick = openSettings;
 $('closeSettings').onclick = closeSettings;
 $('settingsBg').onclick = closeSettings;
 function openSettings(){
-  try { aiRenderKeyStatus(); tasteRender(); } catch(e){}
+  try { aiRenderKeyStatus(); tasteRender(); aiModelRender(); } catch(e){}
   document.querySelectorAll('#segShirt button').forEach(b => b.classList.toggle('on', b.dataset.v === state.settings.shirtMode));
   document.querySelectorAll('#segSize button').forEach(b => b.classList.toggle('on', b.dataset.v === state.settings.size));
   $('knockout').value = state.settings.knockout;
@@ -2524,7 +2535,7 @@ function foRenderChoose(){
     '<div class="fo-choose"><h4>' + f.all.length + ' designs</h4>' +
     '<p>Let Claude look at them all and rank them, or go through two at a time yourself.</p>' +
     '<button class="fo-opt gold" id="foModeAI"><b>🤖 Let Claude rank all ' + f.all.length + (aiGetKey() ? '' : ' (needs key)') + '</b>' +
-    '<span>Claude looks at every design and puts the best on top, with a reason for each. One tap, no bracket.</span></button>' +
+    '<span>Claude looks at every design and puts the best on top, with a reason for each. About ' + aiEstimate(f.all.length) + '.</span></button>' +
     '<button class="fo-opt" id="foModeManual"><b>👆 I\u2019ll pick, two at a time</b>' +
     '<span>The knockout. ' + (f.all.length - 1) + ' taps to crown one champion.</span></button></div>';
   document.getElementById('foModeAI').onclick = () => {
@@ -2539,10 +2550,10 @@ function foRenderChoose(){
     // Big batches cost real money and take real minutes - say so before spending it.
     const n = f.all.length;
     if(n > 30 && !f.bigOk){
-      const est = (n * 0.0025).toFixed(2);
+      const est = aiEstimate(n);
       document.getElementById('foBody').innerHTML =
         '<div class="fo-choose"><h4>' + n + ' designs</h4>' +
-        '<p>That\u2019s roughly <b>$' + est + '</b> and a few minutes of Claude looking at every one.</p>' +
+        '<p>That\u2019s roughly <b>' + est + '</b> on ' + (AI_MODELS[aiGetModel()]||{}).label + ', and a few minutes.<br><br>Change the model in Settings to spend less.</p>' +
         '<button class="fo-opt gold" id="foBigYes"><b>Go ahead</b><span>Rank all ' + n + '.</span></button>' +
         '<button class="fo-opt" id="foBigNo"><b>\u2190 Back</b><span>Select fewer first.</span></button></div>';
       const y = document.getElementById('foBigYes');
@@ -2754,7 +2765,23 @@ function aiTasteBlock(){
     + "rather than scoring the imagined fixed version. A design that needs work can still be the strongest here. "
     + "Their library contains experiments and throwaways, so a design being present is not evidence they like it.";
 }
-const AI_MODEL = 'claude-opus-5-5';
+const AI_MODEL_STORE = 'teesort_ai_model';
+// $ per million tokens (input/output), and a per-design estimate from a ~460px
+// composite (~250 input tokens) plus its one-line verdict (~25 output tokens).
+const AI_MODELS = {
+  'claude-opus-5-5':   {label:'Opus 5.5 — best judgment', per: 0.00125},
+  'claude-sonnet-5-5': {label:'Sonnet 5.5 — good, ~2x cheaper', per: 0.00063},
+  'claude-haiku-5-5':  {label:'Haiku 5.5 — fast + ~40x cheaper', per: 0.00003}
+};
+function aiGetModel(){
+  try { const m = localStorage.getItem(AI_MODEL_STORE); if(m && AI_MODELS[m]) return m; } catch(e){}
+  return 'claude-opus-5-5';
+}
+function aiSetModel(m){ try { localStorage.setItem(AI_MODEL_STORE, m); } catch(e){} }
+function aiEstimate(n){
+  const c = n * (AI_MODELS[aiGetModel()] || AI_MODELS['claude-opus-5-5']).per;
+  return c < 0.01 ? '<1¢' : '$' + c.toFixed(2);
+}
 function aiGetKey(){ try { return localStorage.getItem(AI_KEY_STORE) || ''; } catch(e){ return ''; } }
 function aiSetKey(k){ try { k ? localStorage.setItem(AI_KEY_STORE, k) : localStorage.removeItem(AI_KEY_STORE); } catch(e){} }
 function aiRenderKeyStatus(){
@@ -2784,7 +2811,7 @@ async function aiJudgePair(urlA, urlB){
     + aiTasteBlock()
     + '\n\nReply with ONLY raw JSON, no markdown fence: {"winner":"A" or "B","reason":"one sentence, max 22 words"}';
   const body = {
-    model: AI_MODEL,
+    model: aiGetModel(),
     max_tokens: 300,
     messages: [{role:'user', content:[
       {type:'image', source:{type:'base64', media_type:a.media_type, data:a.data}},
@@ -2852,7 +2879,7 @@ async function aiRankBatch(ids, onProgress){
       method:'POST',
       headers:{'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01',
                'anthropic-dangerous-direct-browser-access':'true'},
-      body: JSON.stringify({model: AI_MODEL, max_tokens: 2000, messages:[{role:'user', content}]})
+      body: JSON.stringify({model: aiGetModel(), max_tokens: 2000, messages:[{role:'user', content}]})
     });
     if(!res.ok){
       let detail=''; try { const j = await res.json(); detail = (j.error && j.error.message) || ''; } catch(e){}
@@ -2987,7 +3014,14 @@ async function foRenderRanked(results){
     showToast('Rejected ' + bottom.length + ' \u00b7 recover in the Rejected filter');
     closeFaceoff(); renderFilters(); renderGrid();
   };
-  document.getElementById('rkDone').onclick = () => { closeFaceoff(); renderFilters(); renderGrid(); };
+  document.getElementById('rkDone').onclick = () => {
+    // Switch the library to Claude's order so closing the sheet lands somewhere that
+    // matches what was just shown, instead of the old order with no explanation.
+    state.sort = 'ai';
+    const sel = document.getElementById('libSort'); if(sel) sel.value = 'ai';
+    closeFaceoff(); renderFilters(); resetPagination(); renderGrid();
+    showToast('Sorted by Claude\u2019s score \u00b7 tap a card to see why');
+  };
 }
 // Wire the Ask Claude row into the current Face-off pairing.
 function foRenderAI(){
@@ -3022,6 +3056,14 @@ function foRenderAI(){
     btn.disabled = false;
   });
 }
+function aiModelRender(){
+  const sel = document.getElementById('aiModelSel');
+  if(sel) sel.value = aiGetModel();
+  const c = document.getElementById('aiModelCost');
+  if(c) c.innerHTML = 'Roughly <b>' + aiEstimate(100) + '</b> per 100 designs \u00b7 <b>' + aiEstimate(900) + '</b> for all 900.';
+}
+const _aiMdl = document.getElementById('aiModelSel');
+if(_aiMdl) _aiMdl.onchange = () => { aiSetModel(_aiMdl.value); aiModelRender(); showToast('Using ' + (AI_MODELS[aiGetModel()]||{}).label); };
 function tasteRender(){
   const ta = document.getElementById('tasteBrief'); if(ta) ta.value = aiGetTaste();
   const st = document.getElementById('tasteStatus');
@@ -3052,6 +3094,7 @@ if(_tasteReset) _tasteReset.onclick = () => {
 };
 aiRenderKeyStatus();
 tasteRender();
+aiModelRender();
 
 
 // ===== Fullscreen viewer (v3 - simple single-slide) =====
