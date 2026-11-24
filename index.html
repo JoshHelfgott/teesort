@@ -1224,7 +1224,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.58 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.59 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -3194,6 +3194,30 @@ function aiMakeFinal(q, ids){
   q.champs.forEach(id => { if(!q.all.includes(id)) q.all.push(id); });
   q.pool = aiShuffle(pool); q.left = q.pool.slice(); q.isFinal = true;
 }
+// v14.59: each finished ranking is remembered as its own batch (when, how many, its top 5),
+// so a later ranking can be compared against exactly the one you pick.
+const AI_RUNS_STORE = 'teesort_ai_runs';
+function aiRunsGet(){ try { return JSON.parse(localStorage.getItem(AI_RUNS_STORE) || '[]'); } catch(e){ return []; } }
+function aiRunSave(at, n, topIds){
+  if(!topIds.length) return;
+  const runs = aiRunsGet().filter(r => r.at !== at);
+  runs.unshift({at, n, top: topIds.slice(0, 5)});
+  try { localStorage.setItem(AI_RUNS_STORE, JSON.stringify(runs.slice(0, 8))); } catch(e){}
+}
+function aiRunWinners(run, excludeSet){
+  return (run.top || []).filter(id => {
+    if(excludeSet.has(id)) return false;
+    const d = state.designs.find(x => x.id === id);
+    return d && d.blob && d.status !== 'rejected' && d.status !== 'archived';
+  });
+}
+function aiRunLabel(r){
+  const d = new Date(r.at), now = new Date();
+  const sameDay = d.toDateString() === now.toDateString();
+  const when = sameDay ? 'today ' + d.toLocaleTimeString([], {hour:'numeric', minute:'2-digit'})
+    : d.toLocaleDateString([], {month:'short', day:'numeric'});
+  return when + ' \u00b7 ' + r.n + ' designs';
+}
 function aiPickChamps(excludeIds){
   const ex = new Set(excludeIds);
   return state.designs
@@ -3288,7 +3312,7 @@ async function aiProcessQueue(onProgress){
   if(run.err) throw run.err;
   if(aiQueueGet()) return {stopped: true};
   const results = aiRunResults(last);
-  return {results, failed: (last.failed || []).length, rounds: last.round || 1, champs: (last.champs || []).length, champIds: last.champs || [], cost: aiSpendGet().run || 0};
+  return {results, failed: (last.failed || []).length, rounds: last.round || 1, champs: (last.champs || []).length, champIds: last.champs || [], cost: aiSpendGet().run || 0, at: last.at};
 }
 // Closing the sheet pauses: groups already sent still land and are saved.
 function aiPause(){
@@ -3341,20 +3365,23 @@ function rankEntry(){
   // Add to an unfinished run rather than throwing its remaining designs away.
   let q = aiQueueGet();
   if(!q){
-    // v14.58: comparing against your earlier best is a choice, not a surprise.
-    const champs = aiPickChamps(ids);
+    // v14.59: you pick whether - and against which earlier ranking - to compare.
     selSetMode(false);
     aiOpenPanel();
     if(!aiGetKey()){ aiRenderNeedKey(); return; }
-    if(!champs.length){ aiBeginRun(ids, []); return; }
+    const sel = new Set(ids);
+    const past = aiRunsGet().map(r => Object.assign({}, r, {champs: aiRunWinners(r, sel)}))
+      .filter(r => r.champs.length).slice(0, 3);
+    if(!past.length){ aiBeginRun(ids, []); return; }
     const t = document.getElementById('foTitle'), sub = document.getElementById('foSub');
     if(t) t.textContent = 'Rank ' + ids.length; if(sub) sub.textContent = '';
     document.getElementById('foBody').innerHTML = '<div class="fo-choose">'
       + '<button class="fo-opt" id="rkJust"><b>Just these ' + ids.length + '</b><span>Rank them against each other</span></button>'
-      + '<button class="fo-opt" id="rkWithTop"><b>These ' + ids.length + ' + my top ' + champs.length + '</b><span>See if the new ones beat your best so far</span></button>'
+      + past.map((r, i) => '<button class="fo-opt" data-past="' + i + '"><b>+ winners from ' + aiRunLabel(r) + '</b>'
+          + '<span>That ranking\u2019s top ' + r.champs.length + ' join the final, tagged \u201cfrom before\u201d</span></button>').join('')
       + '</div>';
     document.getElementById('rkJust').onclick = () => aiBeginRun(ids, []);
-    document.getElementById('rkWithTop').onclick = () => aiBeginRun(ids, champs);
+    document.querySelectorAll('[data-past]').forEach(b => { b.onclick = () => aiBeginRun(ids, past[+b.dataset.past].champs); });
     return;
   } else {
     aiQueueNorm(q);
@@ -3426,6 +3453,11 @@ async function aiRunUI(){
     if(r.stopped || !faceoff) return;
     if(!r.results.length) throw new Error('Claude couldn’t score these');
     if(r.failed) showToast(r.failed + ' couldn’t be scored — rank them again');
+    {
+      const cs = new Set(r.champIds || []);
+      const own = r.results.filter(x => !cs.has(x.id));
+      aiRunSave(r.at, own.length, own.map(x => x.id));
+    }
     foRenderRanked(r.results, {rounds: r.rounds, champs: r.champs, champIds: r.champIds, cost: r.cost});
   } catch(err){
     if(!faceoff) return;
@@ -3462,7 +3494,7 @@ async function foRenderRanked(results, opts){
   body.innerHTML = (canFinal ? '<button class="fo-opt" id="rkFinal" style="width:100%;margin:0 0 10px"><b>🏆 Final round · top 12 side by side</b></button>' : '')
     + ((opts.rounds > 1 || opts.champs) ? '<div class="fo-sub" style="text-align:center;margin:0 0 8px;color:#f3c24b">🏆 '
         + (opts.rounds > 1 ? opts.rounds + ' rounds' : '1 round')
-        + (opts.champs ? ' · ' + opts.champs + ' from before were included (tagged)' : ' · the top ones were judged against each other') + '</div>' : '')
+        + (opts.champs ? ' · ' + opts.champs + ' winners from an earlier ranking were included (tagged)' : ' · the top ones were judged against each other') + '</div>' : '')
     + '<div class="fo-ranklist" id="rkList"></div>'
     + '<div class="fo-actions" style="max-width:none;margin-top:4px">'
     + '<button class="fo-btn primary" id="rkStarTop" style="background:#f3c24b;color:#0d0c10">⭐ Star top 3</button>'
