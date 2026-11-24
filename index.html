@@ -1173,7 +1173,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.46 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.47 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -3088,13 +3088,14 @@ async function aiRankBackground(ids, onProgress){
     for(let i = 0; i < slice.length; i += AI_CHUNK){
       const c = slice.slice(i, i + AI_CHUNK);
       const built = await aiChunkContent(c, 400);
-      prepared += c.length; if(onProgress) onProgress(prepared / ids.length, submitted);
+      prepared += c.length; if(onProgress) onProgress({stage:'prep', prepared, total: ids.length, sent: submitted});
       if(!built) continue;
       const cid = 'ts' + Date.now().toString(36) + '_' + (s + i);
       map[cid] = built.ids;
       requests.push({custom_id: cid, params: aiRequestParams(built.content)});
     }
     if(!requests.length) continue;
+    if(onProgress) onProgress({stage:'upload', prepared, total: ids.length, sent: submitted});
     const res = await fetch('https://api.anthropic.com/v1/messages/batches', {
       method:'POST', headers: aiHeaders(), body: JSON.stringify({requests})
     });
@@ -3106,7 +3107,7 @@ async function aiRankBackground(ids, onProgress){
     const n = Object.values(map).reduce((a, x) => a + x.length, 0);
     const all = aiBatchesGet(); all.push({id: b.id, model, at: Date.now(), map, n}); aiBatchesSet(all);
     submitted += n;
-    if(onProgress) onProgress(prepared / ids.length, submitted);
+    if(onProgress) onProgress({stage:'sent', prepared, total: ids.length, sent: submitted});
     aiBatchStatusRender();
   }
   return submitted;
@@ -3219,52 +3220,68 @@ function aiRenderBackgroundConfirm(ids){
   const scored = ids.filter(id => { const d = state.designs.find(x => x.id === id); return d && d.aiScore !== undefined; });
   const fresh = ids.filter(id => !scored.includes(id));
   const t = document.getElementById('foTitle'), sub = document.getElementById('foSub');
-  if(t) t.textContent = 'Rank ' + ids.length + ' in the background';
+  if(t) t.textContent = 'Rank ' + ids.length + ' designs';
   if(sub) sub.textContent = (AI_MODELS[aiGetModel()] || {}).label || '';
+  // The batch queue is a trade: the judging itself takes minutes, but Anthropic runs it
+  // when they have spare capacity, which is why it's half price. Say that plainly, and
+  // for medium batches offer the fast path too.
   let html = '<div class="fo-choose">'
-    + '<p>Claude works on these on Anthropic’s servers, so <b>you can close the app</b> once they’re uploaded. '
-    + 'Results usually land within an hour (max 24h) and appear next time you open TeeSort. Half price.</p>';
+    + '<p><b>In the background</b> goes to Anthropic’s batch queue: you can close the app once it says '
+    + '<b>Sent ✓</b>. The judging takes minutes, but the queue runs when they have spare capacity — '
+    + 'often quick, within an hour for most, 24h at worst. That wait is why it’s <b>half price</b>.</p>';
   if(scored.length && fresh.length){
-    html += '<button class="fo-opt gold" id="bgFresh"><b>Rank the ' + fresh.length + ' new ones · ~' + aiEstimate(fresh.length, true) + '</b>'
+    html += '<button class="fo-opt gold" id="bgFresh"><b>In the background: the ' + fresh.length + ' new ones · ~' + aiEstimate(fresh.length, true) + '</b>'
          + '<span>Skips ' + scored.length + ' Claude already scored.</span></button>'
-         + '<button class="fo-opt" id="bgAll"><b>Re-rank all ' + ids.length + ' · ~' + aiEstimate(ids.length, true) + '</b><span>Includes the ones already scored.</span></button>';
+         + '<button class="fo-opt" id="bgAll"><b>In the background: all ' + ids.length + ' · ~' + aiEstimate(ids.length, true) + '</b><span>Re-ranks the ones already scored too.</span></button>';
   } else {
-    html += '<button class="fo-opt gold" id="bgAll"><b>Start · ~' + aiEstimate(ids.length, true) + '</b><span>' + ids.length + ' designs.</span></button>';
+    html += '<button class="fo-opt gold" id="bgAll"><b>In the background · ~' + aiEstimate(ids.length, true) + '</b><span>' + ids.length + ' designs. Close the app once sent.</span></button>';
+  }
+  if(ids.length <= 100){
+    const mins = Math.max(1, Math.round(ids.length / 30));
+    html += '<button class="fo-opt" id="bgNow"><b>Right now · ~' + aiEstimate(ids.length) + '</b>'
+         + '<span>Done in about ' + mins + ' min, but keep the app open the whole time. Full price.</span></button>';
   }
   html += '</div>';
   document.getElementById('foBody').innerHTML = html;
+  const bn = document.getElementById('bgNow'); if(bn) bn.onclick = () => aiRunNowUI(ids);
   const bf = document.getElementById('bgFresh'); if(bf) bf.onclick = () => aiRunBackgroundUI(fresh);
   const ba = document.getElementById('bgAll'); if(ba) ba.onclick = () => aiRunBackgroundUI(ids);
 }
 async function aiRunBackgroundUI(ids){
   const t = document.getElementById('foTitle'), sub = document.getElementById('foSub');
-  if(t) t.textContent = 'Uploading to Claude…';
+  if(t) t.textContent = 'Sending to Claude…';
   if(sub) sub.textContent = ids.length + ' designs';
   const body = document.getElementById('foBody');
-  body.innerHTML = '<div class="fo-choose"><h4 id="aiPct">0%</h4>'
-    + '<p id="aiUp">Preparing previews and uploading. <b>Keep this open for this part only</b> — roughly a minute per 100.</p>'
-    + '<p style="font-size:11.5px;opacity:.65">Uploaded in pieces: if you leave early, whatever already went up still gets ranked.</p></div>';
+  // Counts, not a percentage: the old % tracked only preview prep, so it read 100%
+  // while the slow upload was still going - an invitation to leave too early.
+  body.innerHTML = '<div class="fo-choose"><h4 id="aiSent">0 of ' + ids.length + ' sent</h4>'
+    + '<p id="aiStage">Getting ready…</p>'
+    + '<p style="color:#f3c24b;font-weight:700">Don’t leave the app until this says “Sent ✓”.</p>'
+    + '<p style="font-size:11.5px;opacity:.65">Sent in pieces of 120 — anything already sent still gets ranked if you leave early.</p></div>';
   try {
-    const n = await aiRankBackground(ids, (f, sent) => {
-      const e = document.getElementById('aiPct'); if(e) e.textContent = Math.round(f * 100) + '%';
-      const u = document.getElementById('aiUp'); if(u && sent) u.innerHTML = '<b>' + sent + '</b> uploaded so far — those are safe even if you leave now.';
+    const n = await aiRankBackground(ids, (p) => {
+      const a = document.getElementById('aiSent'); if(a) a.textContent = p.sent + ' of ' + p.total + ' sent';
+      const st = document.getElementById('aiStage'); if(!st) return;
+      if(p.stage === 'prep')   st.textContent = 'Preparing previews — ' + p.prepared + ' of ' + p.total + '…';
+      if(p.stage === 'upload') st.textContent = 'Uploading… (the slow part on cellular)';
+      if(p.stage === 'sent')   st.textContent = p.sent < p.total ? 'Preparing the next piece…' : 'Finishing…';
     });
     if(!faceoff) return;
-    if(t) t.textContent = 'Done — you can close the app';
-    body.innerHTML = '<div class="fo-choose"><h4>✓ ' + n + ' sent to Claude</h4>'
-      + '<p>Close TeeSort, lock your phone, whatever. Results usually land within an hour — open the app any time after and they’ll be waiting, sorted best-first.</p>'
+    if(t) t.textContent = 'Sent ✓ — you can close the app';
+    if(sub) sub.textContent = '';
+    body.innerHTML = '<div class="fo-choose"><h4>Sent ✓ — all ' + n + ' are with Claude</h4>'
+      + '<p>Close TeeSort, lock your phone, whatever. When they’re done they’ll be waiting next time you open the app, sorted best-first. The gold line under the version number shows what’s still running.</p>'
       + '<button class="fo-opt" id="bgOk"><b>Got it</b><span>Back to the grid.</span></button></div>';
     const ok = document.getElementById('bgOk'); if(ok) ok.onclick = () => { closeFaceoff(); renderGrid(); };
   } catch(err){
     if(!faceoff) return;
     const queued = aiBatchesGet().reduce((a, b) => a + (b.n || 0), 0);
     if(t) t.textContent = queued ? 'Partly sent' : 'Couldn’t send';
-    body.innerHTML = '<div class="fo-choose"><h4>' + (queued ? queued + ' made it up' : 'Hmm') + '</h4><p>'
+    body.innerHTML = '<div class="fo-choose"><h4>' + (queued ? queued + ' made it' : 'Hmm') + '</h4><p>'
       + String((err && err.message) || 'Something went wrong').replace(/[<>]/g,'')
       + (queued ? '<br><br>Those will still be ranked. Select the rest and rank again to send them.' : '') + '</p></div>';
   }
 }
-
 async function foRenderRanked(results){
   const f = faceoff; if(!f) return;
   f.ranked = results;
