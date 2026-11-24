@@ -75,12 +75,16 @@
   body.selmode .card{pointer-events:auto;cursor:pointer}
   body.selmode .grid{touch-action:manipulation}
   body.selmode main{-webkit-user-select:none;user-select:none}
+  body.selmode main{padding-bottom:calc(130px + env(safe-area-inset-bottom))}
+  body.selmode .toast{bottom:calc(122px + env(safe-area-inset-bottom)) !important}
   .selbar{position:fixed;left:0;right:0;bottom:0;z-index:45;display:none;gap:6px;padding:9px 10px
     calc(9px + env(safe-area-inset-bottom));background:rgba(14,13,16,.97);border-top:1px solid rgba(255,255,255,.12);
-    align-items:center;overflow-x:auto;scrollbar-width:none}
+    align-items:center;flex-wrap:wrap;row-gap:8px}
+  .selbar .brk{flex-basis:100%;height:0}
+  .selbar #selRank{flex:1 1 auto}
   body.selmode .selbar{display:flex}
   .selbar .cnt{flex:0 0 auto;font-size:12.5px;font-weight:800;color:#f3c24b;padding:0 4px;white-space:nowrap}
-  .selbar button{flex:0 0 auto;height:38px;padding:0 12px;border-radius:10px;border:0;font-family:inherit;
+  .selbar button{flex:0 0 auto;height:38px;padding:0 11px;border-radius:10px;border:0;font-family:inherit;
     font-size:12.5px;font-weight:700;background:rgba(255,255,255,.1);color:#fff;white-space:nowrap}
   .selbar button.gold{background:#f3c24b;color:#0d0c10}
   .libcount{flex:0 0 auto;font-size:11px;color:rgba(255,255,255,.45);font-variant-numeric:tabular-nums;white-space:nowrap}
@@ -304,7 +308,7 @@
   .viewer{position:fixed;inset:0;background:#000;z-index:48;display:none;flex-direction:column;touch-action:pan-y}
   .viewer.open{display:flex;animation:fade .2s}
   .viewer-head{position:absolute;top:0;left:0;right:0;padding:env(safe-area-inset-top) 12px 8px;display:flex;align-items:center;justify-content:space-between;gap:8px;z-index:5;background:linear-gradient(to bottom,rgba(0,0,0,.55),transparent);pointer-events:none}
-  .viewer-head .icon-btn{pointer-events:auto;background:rgba(0,0,0,.5);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);touch-action:manipulation}
+  .viewer-head .icon-btn{pointer-events:auto;background:rgba(0,0,0,.5);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);touch-action:manipulation;min-width:44px;min-height:44px;display:flex;align-items:center;justify-content:center}
   .viewer-head .center{flex:1;text-align:center;color:rgba(255,255,255,.85);font-size:12px;font-weight:500;pointer-events:none}
   .viewer-track{flex:1;display:flex;align-items:center;justify-content:center;width:100%;overflow:hidden;position:relative;touch-action:none;-webkit-user-select:none;user-select:none}
   .viewer-slide{width:100%;height:100%;display:flex;align-items:center;justify-content:center;position:relative;will-change:transform,opacity}
@@ -465,12 +469,13 @@
   <span class="cnt" id="selCount">0</span>
   <button id="selAll" style="opacity:.6;font-weight:600">Select all</button>
   <button id="selNone">Clear</button>
+  <button id="selDone" style="margin-left:auto">Done</button>
+  <span class="brk"></span>
   <button class="gold" id="selRank">🤖 Rank</button>
   <button id="selStar">⭐</button>
   <button id="selKeep">✓ Keep</button>
   <button id="selReject">✕ Reject</button>
   <button id="sel1v1" style="opacity:.55;font-weight:600">1v1</button>
-  <button id="selDone">Done</button>
 </div>
 <div class="toast" id="toast">
   <span class="pulse"></span>
@@ -550,8 +555,8 @@
       <div style="font-size:11px;color:rgba(255,255,255,.55);line-height:1.45">Without this, Claude only judges generic craft — legibility, focal point, printability — and would happily rank a clean modern recreation above a real bootleg. Write how you actually see it. Plain words beat rules; Claude is told to treat this as sensibility, not a checklist.</div>
       <textarea id="tasteBrief" rows="7" placeholder="What makes a design right or wrong to you..." style="width:100%;margin-top:8px;border-radius:10px;background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.12);color:#fff;font-size:13px;padding:10px;font-family:inherit;line-height:1.45;-webkit-appearance:none"></textarea>
       <div style="display:flex;gap:8px;margin-top:8px">
-        <button class="ghost" id="tasteSave" style="margin-top:0;flex:1">Save taste</button>
-        <button class="ghost" id="tasteReset" style="margin-top:0;flex:0 0 auto">Reset to draft</button>
+        <button class="ghost" id="tasteSave" style="margin-top:0;flex:1 1 0;width:auto;min-width:0">Save taste</button>
+        <button class="ghost" id="tasteReset" style="margin-top:0;flex:1 1 0;width:auto;min-width:0">Reset to draft</button>
       </div>
       <div style="font-size:11px;margin-top:6px" id="tasteStatus"></div>
 
@@ -1218,7 +1223,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.53 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.54 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -1716,12 +1721,13 @@ async function setStatus(id, status){
   } else {
     updateCardStatusInPlace(d);
   }
-  showToast(d.status === 'inbox' ? 'Cleared status' : `Marked ${STATUS_LABELS[d.status]}`);
+  showToast(d.status === 'inbox' ? 'Cleared status' : `Marked ${STATUS_LABELS[d.status]}`, true);
 }
 
 let toastTimer;
-function showToast(msg){
+function showToast(msg, canUndo){
   $('toastMsg').textContent = msg;
+  $('toastUndo').style.display = canUndo ? '' : 'none';   // v14.53: Undo only where it does something
   $('toast').classList.add('show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => $('toast').classList.remove('show'), 2400);
