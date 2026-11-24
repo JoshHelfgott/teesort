@@ -436,6 +436,7 @@
       </div>
     </div>
     <div class="brand-sub" id="ctxText">Auto \u00b7 0 designs</div>
+    <div class="brand-sub" id="aiBatchStatus" style="display:none;color:#f3c24b;cursor:pointer" onclick="aiCheckBatches(true)"></div>
     <div class="filters" id="filters"></div>
     <div class="libbar">
       <input class="libsearch" id="libSearch" type="search" inputmode="search" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Search name or notes…">
@@ -458,12 +459,13 @@
 
 <div class="selbar" id="selBar">
   <span class="cnt" id="selCount">0</span>
-  <button id="selAll">All shown</button>
+  <button id="selAll" style="opacity:.6;font-weight:600">Select all</button>
   <button id="selNone">Clear</button>
   <button class="gold" id="selRank">🤖 Rank</button>
   <button id="selStar">⭐</button>
   <button id="selKeep">✓ Keep</button>
   <button id="selReject">✕ Reject</button>
+  <button id="sel1v1" style="opacity:.55;font-weight:600">1v1</button>
   <button id="selDone">Done</button>
 </div>
 <div class="toast" id="toast">
@@ -535,8 +537,8 @@
       <div style="font-size:11px;margin-top:6px" id="aiKeyStatus"></div>
       <select class="libsort" id="aiModelSel" style="width:100%;height:40px;margin-top:10px">
         <option value="claude-opus-5-5">Opus 5.5 — best judgment</option>
-        <option value="claude-sonnet-5-5">Sonnet 5.5 — good, ~2x cheaper</option>
-        <option value="claude-haiku-5-5">Haiku 5.5 — fast, ~40x cheaper</option>
+        <option value="claude-sonnet-5-5">Sonnet 5.5 — good, half the cost</option>
+        <option value="claude-haiku-5-5">Haiku 5.5 — fast, ~30x cheaper</option>
       </select>
       <div style="font-size:11px;color:rgba(255,255,255,.5);margin-top:6px" id="aiModelCost"></div>
 
@@ -1171,7 +1173,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.45 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.46 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -2530,7 +2532,6 @@ function startFaceoff(explicitIds){
   foEl().classList.add('open');
   // With a key saved and more than two in play, offer the batch ranking instead of
   // tapping through a whole bracket.
-  if(contenders.length > 2){ foRenderChoose(); return; }
   foNext();
 }
 function foRenderChoose(){
@@ -2674,9 +2675,12 @@ async function foChampion(id){
 const selected = new Set();
 let selMode = false, selDrag = false, selAutoTimer = null;
 function selCount(){ return selected.size; }
+function selCountRender(){
+  const c = document.getElementById('selCount'); if(c) c.textContent = selected.size + ' selected';
+  const r = document.getElementById('selRank'); if(r) r.textContent = '\ud83e\udd16 Rank' + (selected.size ? ' ' + selected.size : '');
+}
 function selSync(){
-  const c = document.getElementById('selCount');
-  if(c) c.textContent = selected.size + ' selected';
+  selCountRender();
   document.querySelectorAll('.card').forEach(el => {
     el.classList.toggle('selected', selected.has(el.getAttribute('data-id')));
   });
@@ -2695,8 +2699,7 @@ function selAdd(id){
   selected.add(id);
   const el = document.querySelector('.card[data-id="' + id + '"]');
   if(el) el.classList.add('selected');
-  const c = document.getElementById('selCount');
-  if(c) c.textContent = selected.size + ' selected';
+  selCountRender();
 }
 function selToggleOne(id){
   if(!id) return;
@@ -2705,8 +2708,7 @@ function selToggleOne(id){
     const el = document.querySelector('.card[data-id="' + id + '"]');
     if(el) el.classList.remove('selected');
   } else selAdd(id);
-  const c = document.getElementById('selCount');
-  if(c) c.textContent = selected.size + ' selected';
+  selCountRender();
 }
 function selStopAuto(){ if(selAutoTimer){ clearInterval(selAutoTimer); selAutoTimer = null; } }
 // Keep scrolling while the finger is held near the top or bottom edge, like Photos.
@@ -2792,8 +2794,9 @@ selWire('selToggle', () => selSetMode(!selMode));
 selWire('selDone', () => selSetMode(false));
 selWire('selNone', () => { selected.clear(); selSync(); });
 selWire('selAll', () => { getFiltered().forEach(d => selected.add(d.id)); selSync(); });
-selWire('selRank', () => {
-  if(!selected.size){ showToast('Drag across some designs first'); return; }
+selWire('selRank', rankEntry);
+selWire('sel1v1', () => {
+  if(selected.size < 2){ showToast('Select at least 2 for head-to-head'); return; }
   startFaceoff(Array.from(selected));
 });
 async function selApply(fn, label){
@@ -2809,7 +2812,7 @@ async function selApply(fn, label){
 selWire('selStar',   () => selApply(async d => { d.finalist = true; if(d.status !== 'round1') d.status = 'round1'; await persistDesign(d); }, 'Starred {n}'));
 selWire('selKeep',   () => selApply(async d => { d.status = 'round1'; await persistDesign(d); }, 'Kept {n}'));
 selWire('selReject', () => selApply(async d => { d.status = 'rejected'; await persistDesign(d); }, 'Rejected {n}'));
-const _foBtn = document.getElementById('faceoffBtn'); if(_foBtn) _foBtn.addEventListener('click', startFaceoff);
+const _foBtn = document.getElementById('faceoffBtn'); if(_foBtn) _foBtn.addEventListener('click', rankEntry);
 
 // ===== v14.34 Claude AI judge =====
 // Sends the two tee composites currently in Face-off to Claude and asks which one
@@ -2849,18 +2852,20 @@ function aiTasteBlock(){
 const AI_MODEL_STORE = 'teesort_ai_model';
 // $ per million tokens (input/output), and a per-design estimate from a ~460px
 // composite (~250 input tokens) plus its one-line verdict (~25 output tokens).
+// Estimated, not measured: ~250 input tokens per 400-460px composite plus a share of
+// the prompt, and ~50 output tokens per design including low-effort thinking.
 const AI_MODELS = {
-  'claude-opus-5-5':   {label:'Opus 5.5 — best judgment', per: 0.00125},
-  'claude-sonnet-5-5': {label:'Sonnet 5.5 — good, ~2x cheaper', per: 0.00063},
-  'claude-haiku-5-5':  {label:'Haiku 5.5 — fast + ~40x cheaper', per: 0.00003}
+  'claude-opus-5-5':   {label:'Opus 5.5 — best judgment', per: 0.002},
+  'claude-sonnet-5-5': {label:'Sonnet 5.5 — good, half the cost', per: 0.001},
+  'claude-haiku-5-5':  {label:'Haiku 5.5 — fast, ~30x cheaper', per: 0.00006}
 };
 function aiGetModel(){
   try { const m = localStorage.getItem(AI_MODEL_STORE); if(m && AI_MODELS[m]) return m; } catch(e){}
   return 'claude-opus-5-5';
 }
 function aiSetModel(m){ try { localStorage.setItem(AI_MODEL_STORE, m); } catch(e){} }
-function aiEstimate(n){
-  const c = n * (AI_MODELS[aiGetModel()] || AI_MODELS['claude-opus-5-5']).per;
+function aiEstimate(n, background){
+  const c = n * (AI_MODELS[aiGetModel()] || AI_MODELS['claude-opus-5-5']).per * (background ? 0.5 : 1);
   return c < 0.01 ? '<1¢' : '$' + c.toFixed(2);
 }
 function aiGetKey(){ try { return localStorage.getItem(AI_KEY_STORE) || ''; } catch(e){ return ''; } }
@@ -2893,7 +2898,8 @@ async function aiJudgePair(urlA, urlB){
     + '\n\nReply with ONLY raw JSON, no markdown fence: {"winner":"A" or "B","reason":"one sentence, max 22 words"}';
   const body = {
     model: aiGetModel(),
-    max_tokens: 300,
+    max_tokens: 4000,
+    output_config: {effort:'low'},
     messages: [{role:'user', content:[
       {type:'image', source:{type:'base64', media_type:a.media_type, data:a.data}},
       {type:'image', source:{type:'base64', media_type:b.media_type, data:b.data}},
@@ -2918,7 +2924,8 @@ async function aiJudgePair(urlA, urlB){
     throw new Error('Claude error ' + res.status + (detail ? ': ' + detail.slice(0,80) : ''));
   }
   const j = await res.json();
-  const txt = ((j.content || []).find(c => c.type === 'text') || {}).text || '';
+  if(j.stop_reason === 'refusal') throw new Error('Claude declined to judge these two');
+  const txt = (j.content || []).filter(c => c.type === 'text').map(c => c.text).join('\n');
   const m = txt.match(/\{[\s\S]*\}/);
   if(!m) throw new Error('Unexpected reply from Claude');
   const out = JSON.parse(m[0]);
@@ -2929,120 +2936,335 @@ async function aiJudgePair(urlA, urlB){
 // Images go up in chunks (the request gets unwieldy past ~12 images), each chunk is
 // scored on the same 0-10 rubric, then chunks are merged by score. With more than one
 // chunk the top of the pile is re-scored together so the final order is apples-to-apples.
-const AI_CHUNK = 12;
-async function aiRankBatch(ids, onProgress){
-  const key = aiGetKey();
-  if(!key) throw new Error('No API key saved');
+const AI_CHUNK = 12;          // designs per request
+const AI_NOW_MAX = 24;        // up to this many: rank right now, results in ~30s
+const AI_SUBMIT_SLICE = 120;  // designs per background upload (a swipe-away loses at most one slice)
+const AI_BATCH_STORE = 'teesort_ai_batches';
+function aiHeaders(){
+  return {'content-type':'application/json','x-api-key':aiGetKey(),'anthropic-version':'2023-06-01',
+          'anthropic-dangerous-direct-browser-access':'true'};
+}
+function aiBatchesGet(){ try { return JSON.parse(localStorage.getItem(AI_BATCH_STORE) || '[]'); } catch(e){ return []; } }
+function aiBatchesSet(a){ try { localStorage.setItem(AI_BATCH_STORE, JSON.stringify(a)); } catch(e){} }
+function aiPendingIds(){
+  const s = new Set();
+  aiBatchesGet().forEach(b => Object.values(b.map || {}).forEach(ids => ids.forEach(i => s.add(i))));
+  return s;
+}
+function aiRankPromptText(n){
+  return 'These are ' + n + ' candidate graphics shown on a t-shirt. Score each as a SHIRT, not as art: '
+    + 'does it read in half a second across a room, is there one clear focal point, will the detail and any text '
+    + 'survive DTG printing on fabric, would someone wear it. Use the full 0-10 range and be honest - do not '
+    + 'cluster everything around 7.'
+    + aiTasteBlock()
+    + '\n\nReply with ONLY raw JSON, no markdown fence: '
+    + '{"results":[{"n":1,"score":8.5,"reason":"max 16 words"}]} with one entry per design, n matching the label.';
+}
+// Build one request's content. Returns the ids actually included, in label order, so
+// "Design 3" always maps back to the right design even if one failed to render.
+async function aiChunkContent(chunkIds, width){
+  const content = [], used = [];
+  for(const id of chunkIds){
+    const d = state.designs.find(x => x.id === id);
+    if(!d || !d.blob) continue;
+    let url; try { url = await composite(d, state.settings, width); } catch(e){ continue; }
+    const parts = _dataUrlParts(url); if(!parts) continue;
+    used.push(id);
+    content.push({type:'text', text:'Design ' + used.length + ':'});
+    content.push({type:'image', source:{type:'base64', media_type:parts.media_type, data:parts.data}});
+  }
+  if(!used.length) return null;
+  content.push({type:'text', text: aiRankPromptText(used.length)});
+  return {content, ids: used};
+}
+// Opus 5.5 always thinks before answering, and thinking counts against max_tokens - a
+// tight cap can truncate the JSON and silently lose a whole paid chunk. Give room,
+// and keep effort low: this is a gut call about how a shirt hits, not a proof.
+function aiRequestParams(content){
+  return {model: aiGetModel(), max_tokens: 8000, output_config:{effort:'low'},
+          messages:[{role:'user', content}]};
+}
+function aiParse(msg, ids){
+  if(msg && msg.stop_reason === 'refusal') throw new Error('Claude declined to judge this group');
+  const txt = ((msg && msg.content) || []).filter(c => c.type === 'text').map(c => c.text).join('\n');
+  const m = txt.match(/\{[\s\S]*\}/);
+  if(!m) throw new Error('Unexpected reply from Claude');
+  const parsed = JSON.parse(m[0]);
+  return (parsed.results || []).map(r => ({
+    id: ids[(r.n | 0) - 1],
+    score: Math.max(0, Math.min(10, Number(r.score) || 0)),
+    reason: String(r.reason || '').slice(0, 160)
+  })).filter(r => r.id);
+}
+async function aiSaveScores(list, model){
+  const now = Date.now();
+  for(const r of list){
+    const d = state.designs.find(x => x.id === r.id);
+    if(d){ d.aiScore = r.score; d.aiReason = r.reason; d.aiRankedAt = now; d.aiModel = model; await persistDesign(d); }
+  }
+}
+function aiHttpError(res, detail){
+  if(res.status === 401) return new Error('Key rejected - check it in Settings');
+  if(res.status === 429) return new Error('Rate limited - try again in a minute');
+  if(res.status === 402 || /credit|billing|balance/i.test(detail)) return new Error('Out of API credit - top up at console.anthropic.com');
+  return new Error('Claude error ' + res.status + (detail ? ': ' + detail.slice(0, 90) : ''));
+}
+// Immediate call. On Opus/Sonnet, ask for a server-side fallback model if a request is
+// refused; if that option itself is rejected or blocked, quietly retry without it.
+async function aiCallNow(content){
+  const model = aiGetModel();
+  const body = aiRequestParams(content);
+  const tryFallback = model !== 'claude-haiku-5-5';   // Haiku has no server-side fallback
+  const send = (withFb) => fetch('https://api.anthropic.com/v1/messages', {
+    method:'POST',
+    headers: Object.assign(aiHeaders(), withFb ? {'anthropic-beta':'server-side-fallback-2026-07-01'} : {}),
+    body: JSON.stringify(withFb ? Object.assign({}, body, {fallbacks:'default'}) : body)
+  });
+  let res;
+  if(tryFallback){
+    try {
+      res = await send(true);
+      if(res.status === 400){
+        let msg = ''; try { msg = JSON.stringify(await res.clone().json()); } catch(e){}
+        if(/fallback|beta/i.test(msg)) res = await send(false);
+      }
+    } catch(e){ res = await send(false); }   // e.g. a blocked header: plain request instead
+  } else {
+    res = await send(false);
+  }
+  if(!res.ok){
+    let detail = ''; try { const j = await res.json(); detail = (j.error && j.error.message) || ''; } catch(e){}
+    throw aiHttpError(res, detail);
+  }
+  return await res.json();
+}
+// Small runs: rank now. One bad chunk no longer kills the rest.
+async function aiRankNow(ids, onProgress){
   const chunks = [];
   for(let i = 0; i < ids.length; i += AI_CHUNK) chunks.push(ids.slice(i, i + AI_CHUNK));
-  let done = 0, total = ids.length + (chunks.length > 1 ? Math.min(8, ids.length) : 0);
-  const scoreChunk = async (chunkIds) => {
-    const content = [];
-    for(let i = 0; i < chunkIds.length; i++){
-      const d = state.designs.find(x => x.id === chunkIds[i]);
-      if(!d) continue;
-      const url = await composite(d, state.settings, 460);   // small: many images per request
-      const parts = _dataUrlParts(url);
-      if(!parts) continue;
-      content.push({type:'text', text:'Design ' + (i + 1) + ':'});
-      content.push({type:'image', source:{type:'base64', media_type:parts.media_type, data:parts.data}});
-      done++; if(onProgress) onProgress(done / total);
-    }
-    content.push({type:'text', text:
-      'These are ' + chunkIds.length + ' candidate graphics shown on a t-shirt. Score each as a SHIRT, not as art: '
-      + 'does it read in half a second across a room, is there one clear focal point, will the detail and any text '
-      + 'survive DTG printing on fabric, would someone wear it. Busy or low-contrast work should score lower even if '
-      + 'the artwork is cool. Use the full 0-10 range and be honest - do not cluster everything around 7. '
-      + aiTasteBlock()
-      + '\n\nReply with ONLY raw JSON, no markdown fence: '
-      + '{"results":[{"n":1,"score":8.5,"reason":"max 16 words"}]} with one entry per design, n matching the label.'});
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method:'POST',
-      headers:{'content-type':'application/json','x-api-key':key,'anthropic-version':'2023-06-01',
-               'anthropic-dangerous-direct-browser-access':'true'},
-      body: JSON.stringify({model: aiGetModel(), max_tokens: 2000, messages:[{role:'user', content}]})
-    });
-    if(!res.ok){
-      let detail=''; try { const j = await res.json(); detail = (j.error && j.error.message) || ''; } catch(e){}
-      if(res.status === 401) throw new Error('Key rejected - check it in Settings');
-      if(res.status === 429) throw new Error('Rate limited - try a smaller batch in a moment');
-      throw new Error('Claude error ' + res.status + (detail ? ': ' + detail.slice(0,80) : ''));
-    }
-    const j = await res.json();
-    const txt = ((j.content || []).find(c => c.type === 'text') || {}).text || '';
-    const m = txt.match(/\{[\s\S]*\}/);
-    if(!m) throw new Error('Unexpected reply from Claude');
-    const parsed = JSON.parse(m[0]);
-    return (parsed.results || []).map(r => ({
-      id: chunkIds[(r.n | 0) - 1],
-      score: Math.max(0, Math.min(10, Number(r.score) || 0)),
-      reason: String(r.reason || '').slice(0, 140)
-    })).filter(r => r.id);
-  };
-  let out = [];
+  let out = [], failed = 0, done = 0, lastErr = null;
   for(const c of chunks){
-    const part = await scoreChunk(c);
-    out = out.concat(part);
-    // Save as we go: iOS suspends a backgrounded PWA mid-run, and losing twenty
-    // minutes of paid scoring to a swipe-away is not acceptable.
-    const now = Date.now();
-    for(const r of part){
-      const d = state.designs.find(x => x.id === r.id);
-      if(d){ d.aiScore = r.score; d.aiReason = r.reason; d.aiRankedAt = now; await persistDesign(d); }
+    try {
+      const built = await aiChunkContent(c, 460);
+      if(!built){ failed += c.length; }
+      else {
+        const part = aiParse(await aiCallNow(built.content), built.ids);
+        await aiSaveScores(part, aiGetModel());
+        out = out.concat(part);
+        failed += c.length - part.length;
+      }
+    } catch(e){
+      if(/Key rejected|Out of API credit/.test(e.message)) throw e;   // nothing else will work either
+      failed += c.length; lastErr = e;
     }
+    done += c.length; if(onProgress) onProgress(done / ids.length);
   }
   out.sort((a, b) => b.score - a.score);
-  // Re-score the leaders together so cross-chunk order is trustworthy.
+  // Two chunks were scored separately; re-judge the leaders side by side so the top of
+  // the list is a real comparison, not two scales stitched together.
   if(chunks.length > 1 && out.length > 2){
-    const finalists = out.slice(0, Math.min(8, out.length));
     try {
-      const re = await scoreChunk(finalists.map(r => r.id));
-      const byId = {}; re.forEach(r => { byId[r.id] = r; });
-      out = out.map(r => byId[r.id] ? {id:r.id, score:byId[r.id].score, reason:byId[r.id].reason} : r)
-               .sort((a, b) => b.score - a.score);
-    } catch(e){ /* keep the merged order if the finals pass fails */ }
+      const top = out.slice(0, Math.min(8, out.length)).map(r => r.id);
+      const built = await aiChunkContent(top, 460);
+      if(built){
+        const re = aiParse(await aiCallNow(built.content), built.ids);
+        await aiSaveScores(re, aiGetModel());
+        const byId = {}; re.forEach(r => { byId[r.id] = r; });
+        out = out.map(r => byId[r.id] || r).sort((a, b) => b.score - a.score);
+      }
+    } catch(e){ /* keep the merged order */ }
   }
-  return out;
+  return {results: out, failed, lastErr};
 }
-async function foRunAIRank(){
-  const f = faceoff; if(!f) return;
-  const ids = f.all.slice();
+// Big runs: hand the work to Anthropic's Batches API. It runs on their servers at half
+// price, so once uploaded the phone can be locked or the app closed. Uploads go up in
+// slices, each recorded as soon as it's accepted, so stopping midway keeps what's in.
+async function aiRankBackground(ids, onProgress){
+  const model = aiGetModel();
+  let prepared = 0, submitted = 0;
+  for(let s = 0; s < ids.length; s += AI_SUBMIT_SLICE){
+    const slice = ids.slice(s, s + AI_SUBMIT_SLICE);
+    const requests = [], map = {};
+    for(let i = 0; i < slice.length; i += AI_CHUNK){
+      const c = slice.slice(i, i + AI_CHUNK);
+      const built = await aiChunkContent(c, 400);
+      prepared += c.length; if(onProgress) onProgress(prepared / ids.length, submitted);
+      if(!built) continue;
+      const cid = 'ts' + Date.now().toString(36) + '_' + (s + i);
+      map[cid] = built.ids;
+      requests.push({custom_id: cid, params: aiRequestParams(built.content)});
+    }
+    if(!requests.length) continue;
+    const res = await fetch('https://api.anthropic.com/v1/messages/batches', {
+      method:'POST', headers: aiHeaders(), body: JSON.stringify({requests})
+    });
+    if(!res.ok){
+      let detail = ''; try { const j = await res.json(); detail = (j.error && j.error.message) || ''; } catch(e){}
+      throw aiHttpError(res, detail);
+    }
+    const b = await res.json();
+    const n = Object.values(map).reduce((a, x) => a + x.length, 0);
+    const all = aiBatchesGet(); all.push({id: b.id, model, at: Date.now(), map, n}); aiBatchesSet(all);
+    submitted += n;
+    if(onProgress) onProgress(prepared / ids.length, submitted);
+    aiBatchStatusRender();
+  }
+  return submitted;
+}
+function aiBatchStatusRender(){
+  const el = document.getElementById('aiBatchStatus'); if(!el) return;
+  const all = aiBatchesGet();
+  if(!all.length){ el.style.display = 'none'; return; }
+  const n = all.reduce((a, b) => a + (b.n || 0), 0);
+  el.style.display = 'block';
+  el.textContent = '🤖 Claude is ranking ' + n + ' in the background · usually under an hour · tap to check';
+}
+let aiChecking = false, aiDesignsLoaded = false;
+// Pull finished background runs. Safe to call often: on launch, on returning to the app,
+// and once a minute while it's open.
+async function aiCheckBatches(manual){
+  if(aiChecking || !aiDesignsLoaded || !aiGetKey()) return;
+  const all = aiBatchesGet();
+  if(!all.length){ aiBatchStatusRender(); if(manual) showToast('Nothing running in the background'); return; }
+  aiChecking = true;
+  let got = 0, bad = 0, stillRunning = 0;
+  const keep = [], origIds = new Set(all.map(b => b.id));
+  try {
+    for(const b of all){
+      let info;
+      try {
+        const r = await fetch('https://api.anthropic.com/v1/messages/batches/' + b.id, {headers: aiHeaders()});
+        if(r.status === 404){ bad += b.n || 0; continue; }       // expired or gone
+        if(!r.ok){ keep.push(b); continue; }
+        info = await r.json();
+      } catch(e){ keep.push(b); continue; }
+      if(info.processing_status !== 'ended'){ keep.push(b); stillRunning += b.n || 0; continue; }
+      try {
+        const rr = await fetch(info.results_url, {headers: aiHeaders()});
+        if(!rr.ok){ keep.push(b); continue; }
+        const lines = (await rr.text()).split('\n').filter(Boolean);
+        for(const line of lines){
+          let row; try { row = JSON.parse(line); } catch(e){ continue; }
+          const ids = (b.map || {})[row.custom_id]; if(!ids) continue;
+          if(row.result && row.result.type === 'succeeded'){
+            try { const part = aiParse(row.result.message, ids); await aiSaveScores(part, b.model); got += part.length; bad += ids.length - part.length; }
+            catch(e){ bad += ids.length; }
+          } else bad += ids.length;
+        }
+      } catch(e){ keep.push(b); continue; }
+    }
+  } finally {
+    const added = aiBatchesGet().filter(b => !origIds.has(b.id));   // submitted while we checked
+    aiBatchesSet(keep.concat(added));
+    aiChecking = false;
+  }
+  aiBatchStatusRender();
+  if(got){
+    state.sort = 'ai';
+    const sel = document.getElementById('libSort'); if(sel) sel.value = 'ai';
+    renderFilters(); resetPagination(); renderGrid();
+    showToast('Claude ranked ' + got + (bad ? ' · ' + bad + ' failed, select & rank again' : '') + ' · sorted by score');
+  } else if(manual){
+    showToast(stillRunning ? 'Still working on ' + stillRunning + ' — check back soon' : (bad ? bad + ' failed — rank them again' : 'Nothing new yet'));
+  }
+}
+// ---- The one way in: rank what's selected ----
+function rankEntry(){
+  if(!selMode){ selSetMode(true); showToast('Drag across the designs to rank, then tap Rank'); return; }
+  if(selected.size < 2){ showToast('Select at least 2 designs — drag across them'); return; }
+  const pending = aiPendingIds();
+  const ids = Array.from(selected).filter(id => {
+    const d = state.designs.find(x => x.id === id);
+    return d && d.blob && !pending.has(id);
+  });
+  const skippedPending = Array.from(selected).filter(id => pending.has(id)).length;
+  if(skippedPending) showToast(skippedPending + ' already being ranked — skipped');
+  if(ids.length < 2){ if(!skippedPending) showToast('Select at least 2 designs'); return; }
+  faceoff = { pool:[], pending:[], losers:[], round:1, initial: ids.length, a:null, b:null, history:[], all: ids.slice() };
+  selSetMode(false);
+  foEl().classList.add('open');
+  const u = document.getElementById('foUndo'); if(u) u.disabled = true;
+  if(!aiGetKey()){ aiRenderNeedKey(); return; }
+  if(ids.length <= AI_NOW_MAX) aiRunNowUI(ids); else aiRenderBackgroundConfirm(ids);
+}
+function aiRenderNeedKey(){
   const t = document.getElementById('foTitle'), sub = document.getElementById('foSub');
-  if(t) t.textContent = 'Claude is looking...';
+  if(t) t.textContent = 'Claude needs a key first'; if(sub) sub.textContent = '';
+  document.getElementById('foBody').innerHTML = '<div class="fo-choose"><h4>One-time setup</h4>'
+    + '<p>1. Go to <b>console.anthropic.com/settings/keys</b><br>2. <b>Create Key</b> and copy it<br>'
+    + '3. TeeSort → <b>Settings</b> → <b>🤖 Claude AI judge</b> → paste → Save</p></div>';
+}
+async function aiRunNowUI(ids){
+  const t = document.getElementById('foTitle'), sub = document.getElementById('foSub');
+  if(t) t.textContent = 'Claude is looking…';
+  if(sub) sub.textContent = ids.length + ' designs · about ' + aiEstimate(ids.length);
   const body = document.getElementById('foBody');
   body.innerHTML = '<div class="fo-choose"><h4 id="aiPct">0%</h4>'
-    + '<p id="aiProg">Claude is looking at ' + ids.length + ' designs on '
-    + ((AI_MODELS[aiGetModel()]||{}).label || 'Claude') + '.</p>'
-    + '<p style="color:#f3c24b;font-weight:600">Keep this screen open \u2014 iPhone pauses the app if you swipe away, and the run stops.</p>'
-    + '<p style="font-size:11px;opacity:.6">Scores are saved as each batch finishes, so nothing already done is lost.</p></div>';
-  const setP = (frac) => {
-    const e = document.getElementById('aiPct'); if(e) e.textContent = Math.round(frac * 100) + '%';
-  };
+    + '<p>Usually under a minute. Leave this open until it finishes.</p></div>';
   try {
-    const results = await aiRankBatch(ids, setP);
-    if(!faceoff) return;                          // user bailed mid-flight
-    if(!results.length) throw new Error('Claude returned nothing to rank');
-    foRenderRanked(results);
+    const r = await aiRankNow(ids, f => { const e = document.getElementById('aiPct'); if(e) e.textContent = Math.round(f * 100) + '%'; });
+    if(!faceoff) return;
+    if(!r.results.length) throw (r.lastErr || new Error('Claude returned nothing to rank'));
+    if(r.failed) showToast(r.failed + ' couldn’t be scored — select & rank them again');
+    foRenderRanked(r.results);
   } catch(err){
     if(!faceoff) return;
-    if(t) t.textContent = 'Stopped early';
-    const done = ids.map(id => state.designs.find(x => x.id === id))
-                    .filter(d => d && d.aiScore !== undefined)
-                    .sort((a,b) => b.aiScore - a.aiScore)
-                    .map(d => ({id:d.id, score:d.aiScore, reason:d.aiReason}));
-    if(done.length){
-      showToast('Stopped, but kept ' + done.length + ' already scored');
-      foRenderRanked(done);
-      return;
-    }
-    body.innerHTML = '<div class="fo-choose"><h4>Hmm</h4><p>' +
-      String((err && err.message) || 'Something went wrong').replace(/[<>]/g,'') + '</p>' +
-      '<button class="fo-opt" id="aiRetry"><b>Try again</b><span>Resend the same designs.</span></button>' +
-      '<button class="fo-opt" id="aiBail"><b>Pick them myself instead</b><span>Switch to the two-at-a-time knockout.</span></button></div>';
-    const r = document.getElementById('aiRetry'); if(r) r.onclick = foRunAIRank;
-    const bl = document.getElementById('aiBail'); if(bl) bl.onclick = () => foNext();
+    if(t) t.textContent = 'Couldn’t rank';
+    body.innerHTML = '<div class="fo-choose"><h4>Hmm</h4><p>' + String((err && err.message) || 'Something went wrong').replace(/[<>]/g,'') + '</p>'
+      + '<button class="fo-opt" id="aiRetry"><b>Try again</b><span>Same designs.</span></button></div>';
+    const rb = document.getElementById('aiRetry'); if(rb) rb.onclick = () => aiRunNowUI(ids);
   }
 }
+function aiRenderBackgroundConfirm(ids){
+  const scored = ids.filter(id => { const d = state.designs.find(x => x.id === id); return d && d.aiScore !== undefined; });
+  const fresh = ids.filter(id => !scored.includes(id));
+  const t = document.getElementById('foTitle'), sub = document.getElementById('foSub');
+  if(t) t.textContent = 'Rank ' + ids.length + ' in the background';
+  if(sub) sub.textContent = (AI_MODELS[aiGetModel()] || {}).label || '';
+  let html = '<div class="fo-choose">'
+    + '<p>Claude works on these on Anthropic’s servers, so <b>you can close the app</b> once they’re uploaded. '
+    + 'Results usually land within an hour (max 24h) and appear next time you open TeeSort. Half price.</p>';
+  if(scored.length && fresh.length){
+    html += '<button class="fo-opt gold" id="bgFresh"><b>Rank the ' + fresh.length + ' new ones · ~' + aiEstimate(fresh.length, true) + '</b>'
+         + '<span>Skips ' + scored.length + ' Claude already scored.</span></button>'
+         + '<button class="fo-opt" id="bgAll"><b>Re-rank all ' + ids.length + ' · ~' + aiEstimate(ids.length, true) + '</b><span>Includes the ones already scored.</span></button>';
+  } else {
+    html += '<button class="fo-opt gold" id="bgAll"><b>Start · ~' + aiEstimate(ids.length, true) + '</b><span>' + ids.length + ' designs.</span></button>';
+  }
+  html += '</div>';
+  document.getElementById('foBody').innerHTML = html;
+  const bf = document.getElementById('bgFresh'); if(bf) bf.onclick = () => aiRunBackgroundUI(fresh);
+  const ba = document.getElementById('bgAll'); if(ba) ba.onclick = () => aiRunBackgroundUI(ids);
+}
+async function aiRunBackgroundUI(ids){
+  const t = document.getElementById('foTitle'), sub = document.getElementById('foSub');
+  if(t) t.textContent = 'Uploading to Claude…';
+  if(sub) sub.textContent = ids.length + ' designs';
+  const body = document.getElementById('foBody');
+  body.innerHTML = '<div class="fo-choose"><h4 id="aiPct">0%</h4>'
+    + '<p id="aiUp">Preparing previews and uploading. <b>Keep this open for this part only</b> — roughly a minute per 100.</p>'
+    + '<p style="font-size:11.5px;opacity:.65">Uploaded in pieces: if you leave early, whatever already went up still gets ranked.</p></div>';
+  try {
+    const n = await aiRankBackground(ids, (f, sent) => {
+      const e = document.getElementById('aiPct'); if(e) e.textContent = Math.round(f * 100) + '%';
+      const u = document.getElementById('aiUp'); if(u && sent) u.innerHTML = '<b>' + sent + '</b> uploaded so far — those are safe even if you leave now.';
+    });
+    if(!faceoff) return;
+    if(t) t.textContent = 'Done — you can close the app';
+    body.innerHTML = '<div class="fo-choose"><h4>✓ ' + n + ' sent to Claude</h4>'
+      + '<p>Close TeeSort, lock your phone, whatever. Results usually land within an hour — open the app any time after and they’ll be waiting, sorted best-first.</p>'
+      + '<button class="fo-opt" id="bgOk"><b>Got it</b><span>Back to the grid.</span></button></div>';
+    const ok = document.getElementById('bgOk'); if(ok) ok.onclick = () => { closeFaceoff(); renderGrid(); };
+  } catch(err){
+    if(!faceoff) return;
+    const queued = aiBatchesGet().reduce((a, b) => a + (b.n || 0), 0);
+    if(t) t.textContent = queued ? 'Partly sent' : 'Couldn’t send';
+    body.innerHTML = '<div class="fo-choose"><h4>' + (queued ? queued + ' made it up' : 'Hmm') + '</h4><p>'
+      + String((err && err.message) || 'Something went wrong').replace(/[<>]/g,'')
+      + (queued ? '<br><br>Those will still be ranked. Select the rest and rank again to send them.' : '') + '</p></div>';
+  }
+}
+
 async function foRenderRanked(results){
   const f = faceoff; if(!f) return;
   f.ranked = results;
@@ -3163,7 +3385,7 @@ function aiModelRender(){
   const sel = document.getElementById('aiModelSel');
   if(sel) sel.value = aiGetModel();
   const c = document.getElementById('aiModelCost');
-  if(c) c.innerHTML = 'Roughly <b>' + aiEstimate(100) + '</b> per 100 designs \u00b7 <b>' + aiEstimate(900) + '</b> for all 900.';
+  if(c) c.innerHTML = 'Estimated <b>' + aiEstimate(20) + '</b> for 20 now \u00b7 <b>' + aiEstimate(900, true) + '</b> for 900 in the background (half price).';
 }
 const _aiMdl = document.getElementById('aiModelSel');
 if(_aiMdl) _aiMdl.onchange = () => { aiSetModel(_aiMdl.value); aiModelRender(); showToast('Using ' + (AI_MODELS[aiGetModel()]||{}).label); };
@@ -3651,6 +3873,11 @@ window.addEventListener('pageshow', e => {
     showToast('Storage unavailable \u2014 designs will not persist');
   }
   render();
+  aiDesignsLoaded = true;
+  aiBatchStatusRender();
+  aiCheckBatches();
+  document.addEventListener('visibilitychange', () => { if(document.visibilityState === 'visible') aiCheckBatches(); });
+  setInterval(() => { if(document.visibilityState === 'visible' && aiBatchesGet().length) aiCheckBatches(); }, 60000);
 })();
 
 
