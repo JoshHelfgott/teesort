@@ -346,7 +346,7 @@
   .viewer-action.fix.on{background:rgba(245,158,11,.95);color:#000}
   .viewer-action.reject.on{background:rgba(239,68,68,.95);color:#fff}
   .viewer-pos{position:absolute;top:50%;transform:translateY(-50%);color:rgba(255,255,255,.5);font-size:11px;font-weight:500;pointer-events:none;background:rgba(0,0,0,.4);border-radius:999px;padding:4px 9px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);z-index:2}
-  .viewer-pos.top{top:max(env(safe-area-inset-top),20px);transform:none;left:50%;margin-left:-30px}
+  .viewer-pos.top{top:calc(max(env(safe-area-inset-top),20px) + 44px);transform:translateX(-50%);left:50%;margin-left:0;white-space:nowrap}
   .viewer-hint{text-align:center;color:rgba(255,255,255,.4);font-size:10.5px;margin-bottom:10px;pointer-events:none}
   .viewer-hint.ai{color:rgba(255,255,255,.88);font-size:13.5px;line-height:1.35;padding:0 18px}
 
@@ -951,26 +951,45 @@ function loadImage(src, timeoutMs){
   });
 }
 
+// v14.61: always hand back something no bigger than maxSize. Safari ignores the resize
+// options of createImageBitmap, so the old code kept FULL-size copies of big images (often
+// 40-80MB each, up to 30 at once) - iPhone then ran out of memory and the sharp viewer
+// picture silently failed to load. Big images are now scaled down on a canvas, in halving
+// steps so the result stays sharp.
 async function blobToBitmap(blob, maxSize){
+  let src = null, url = null;
   if(typeof createImageBitmap === 'function'){
-    try {
-      if(maxSize){
-        const probe = await createImageBitmap(blob);
-        const scale = Math.min(1, maxSize / Math.max(probe.width, probe.height));
-        if(scale < 1){
-          const w = Math.round(probe.width * scale);
-          const h = Math.round(probe.height * scale);
-          probe.close && probe.close();
-          return await createImageBitmap(blob, {resizeWidth:w, resizeHeight:h, resizeQuality:'high'});
-        }
-        return probe;
-      }
-      return await createImageBitmap(blob);
-    } catch(e){}
+    try { src = await createImageBitmap(blob); } catch(e){ src = null; }
   }
-  const url = URL.createObjectURL(blob);
-  try { return await loadImage(url); }
-  finally { setTimeout(()=>URL.revokeObjectURL(url), 1000); }
+  if(!src){
+    url = URL.createObjectURL(blob);
+    try { src = await loadImage(url); }
+    finally { setTimeout(() => URL.revokeObjectURL(url), 1000); }
+  }
+  const w0 = src.width || src.naturalWidth, h0 = src.height || src.naturalHeight;
+  if(!maxSize || Math.max(w0, h0) <= maxSize) return src;
+  const scale = maxSize / Math.max(w0, h0);
+  const tw = Math.max(1, Math.round(w0 * scale)), th = Math.max(1, Math.round(h0 * scale));
+  let cur = src, cw = w0, ch = h0;
+  while(cw / 2 >= tw * 1.4){                 // halve while far too big
+    const c = document.createElement('canvas');
+    c.width = Math.round(cw / 2); c.height = Math.round(ch / 2);
+    const x = c.getContext('2d'); x.imageSmoothingQuality = 'high';
+    x.drawImage(cur, 0, 0, c.width, c.height);
+    if(cur !== src){ cur.width = 0; } cw = c.width; ch = c.height; cur = c;
+  }
+  const out = document.createElement('canvas');
+  out.width = tw; out.height = th;
+  const ox = out.getContext('2d'); ox.imageSmoothingQuality = 'high';
+  ox.drawImage(cur, 0, 0, tw, th);
+  if(cur !== src) cur.width = 0;
+  if(src.close) src.close();
+  return out;
+}
+// Viewer pictures sized for the actual screen (retina, and the close-up zoom), not a fixed 1100px.
+function viewerOutW(){
+  const dpr = Math.min(3, window.devicePixelRatio || 2);
+  return Math.max(1100, Math.min(1800, Math.round((window.innerWidth || 390) * dpr * 1.35 / 100) * 100));
 }
 
 async function detectShirtAndDims(blob){
@@ -1080,7 +1099,7 @@ function cardSizeLabel(d){ return sizeLabelFor(resolvedSize(d, state.settings));
 // size/shirt/side toggle. iOS Safari fails on repeated decodes of large blobs, which
 // caused "image load failed" every time the size button was pressed.
 const _designBitmapCache = new Map(); // id -> { bmp, maxSize }
-const DESIGN_BMP_LIMIT = 30;
+const DESIGN_BMP_LIMIT = 12;
 async function getDesignBitmap(d, maxSize){
   const cached = _designBitmapCache.get(d.id);
   if(cached && cached.maxSize >= maxSize) return cached.bmp;
@@ -1117,7 +1136,7 @@ async function composite(d, settings, outputW){
   // v14.16: cache the decoded design canvas per-design so size/shirt toggles don't
   // re-decode the blob (re-decoding large blobs fails on iOS Safari -> "image load failed").
   const [graphicBM, shirt] = await Promise.all([
-    getDesignBitmap(d, Math.max(1200, outputW * 1.5)),
+    getDesignBitmap(d, Math.max(500, Math.round(outputW * 0.8))),
     getShirtImage(shirtColor, side)
   ]);
   const aspect = shirt.height / shirt.width;
@@ -1247,7 +1266,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.60 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.61 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -3786,7 +3805,7 @@ async function loadCurrent(){
   try {
     let url;
     if(viewerState.view === 'original'){
-      const bm = await blobToBitmap(d.blob, 1400);
+      const bm = await blobToBitmap(d.blob, viewerOutW() + 200);
       if(token !== viewerState.loadToken){ failSafe(); return; }
       const c = document.createElement('canvas');
       c.width = bm.width; c.height = bm.height;
@@ -3794,7 +3813,7 @@ async function loadCurrent(){
       if(bm.close) bm.close();
       url = c.toDataURL('image/jpeg', 0.88);
     } else {
-      url = await composite(d, state.settings, 1100);
+      url = await composite(d, state.settings, viewerOutW());
     }
     if(token !== viewerState.loadToken){ failSafe(); return; }
     if(!url){ failSafe(); return; }
@@ -3813,6 +3832,7 @@ async function loadCurrent(){
   } catch(e){
     console.error('viewer load', e);
     failSafe();
+    showToast('Couldn\u2019t load the sharp version \u2014 swipe away and back to retry');
   }
 }
 
@@ -3840,6 +3860,9 @@ function updateViewerUI(){
       hint.classList.remove('ai');
     }
   }
+  // Keep the size button above the caption instead of on top of it.
+  const foot = document.querySelector('.viewer-foot'), pill = document.getElementById('viewerSizeBtn');
+  if(foot && pill) pill.style.bottom = (foot.offsetHeight + 8) + 'px';
   $('vaKeep').classList.toggle('on', d.status === 'round1');
   $('vaFix').classList.toggle('on', d.status === 'needs_fixing');
   $('vaReject').classList.toggle('on', d.status === 'rejected');
@@ -4094,7 +4117,7 @@ const _el1=document.getElementById('viewerSizeBtn'); if(_el1) _el1.onclick = asy
   const next = nextSize(resolvedSize(d, state.settings));
   d.sizeOverride = next;
   let url = null;
-  try { url = await _withTimeout(composite(d, state.settings, 1100), 20000); } catch(e){ url = null; }
+  try { url = await _withTimeout(composite(d, state.settings, viewerOutW()), 20000); } catch(e){ url = null; }
   if(lbl) lbl.style.opacity = '';
   _viewerSizeBusy = false;
   if(!url){ d.sizeOverride = prevOverride; showToast('Couldn\u2019t redraw that one \u2014 tap again'); return; }
