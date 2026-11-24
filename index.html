@@ -348,6 +348,7 @@
   .viewer-pos{position:absolute;top:50%;transform:translateY(-50%);color:rgba(255,255,255,.5);font-size:11px;font-weight:500;pointer-events:none;background:rgba(0,0,0,.4);border-radius:999px;padding:4px 9px;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);z-index:2}
   .viewer-pos.top{top:max(env(safe-area-inset-top),20px);transform:none;left:50%;margin-left:-30px}
   .viewer-hint{text-align:center;color:rgba(255,255,255,.4);font-size:10.5px;margin-bottom:10px;pointer-events:none}
+  .viewer-hint.ai{color:rgba(255,255,255,.88);font-size:13.5px;line-height:1.35;padding:0 18px}
 
   .file-input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
 
@@ -720,7 +721,7 @@
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17 3l4 4-4 4M21 7H3M7 21l-4-4 4-4M3 17h18"/></svg>
   </button>
   <div class="viewer-foot">
-    <div class="viewer-hint">Tap = Preview / Original  •  Swipe = next  •  Long-press = options</div>
+    <div class="viewer-hint" id="viewerHint">Tap = Preview / Original  •  Swipe = next  •  Long-press = options</div>
     <div class="viewer-actions">
       <button class="viewer-action keep" id="vaKeep">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
@@ -1223,7 +1224,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.54 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.55 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -3016,6 +3017,9 @@ function aiRankPromptText(n){
     + 'does it read in half a second across a room, is there one clear focal point, will the detail and any text '
     + 'survive DTG printing on fabric, would someone wear it. Use the full 0-10 range and be honest - do not '
     + 'cluster everything around 7.'
+    + ' Scores must mean the same thing in every group you are ever shown, so judge each design against this '
+    + 'fixed scale, not against the others in this batch: 9-10 = print it now, among the best; 7-8 = strong, '
+    + 'worth printing; 5-6 = fine but not special; 3-4 = weak; 0-2 = no. A batch can be all 8s or all 3s.'
     + aiTasteBlock()
     + '\n\nReply with ONLY raw JSON, no markdown fence: '
     + '{"results":[{"n":1,"score":8.5,"reason":"max 16 words"}]} with one entry per design, n matching the label.';
@@ -3310,8 +3314,9 @@ async function aiRunUI(){
     aiQueueStatusRender();
   }
 }
-async function foRenderRanked(results){
+async function foRenderRanked(results, opts){
   const f = faceoff; if(!f) return;
+  opts = opts || {};
   f.ranked = results;
   // v14.41: keep the verdict. Scores used to evaporate when the sheet closed, so you
   // could never sort by them, see the reason later, or act on a ranking tomorrow.
@@ -3325,7 +3330,12 @@ async function foRenderRanked(results){
   if(t) t.textContent = 'Claude’s ranking';
   if(sub) sub.textContent = 'Best on top · tap ⭐ to keep · you decide';
   const body = document.getElementById('foBody');
-  body.innerHTML = '<div class="fo-ranklist" id="rkList"></div>'
+  // v14.55: groups of 12 are scored separately, so the leaders were never judged side by
+  // side. One tap puts the top 12 in front of Claude together.
+  const canFinal = !opts.final && results.length > AI_CHUNK;
+  body.innerHTML = (canFinal ? '<button class="fo-opt" id="rkFinal" style="width:100%;margin:0 0 10px"><b>🏆 Final round · top 12 side by side</b></button>' : '')
+    + (opts.final ? '<div class="fo-sub" style="text-align:center;margin:0 0 8px;color:#f3c24b">🏆 Top 12 judged side by side</div>' : '')
+    + '<div class="fo-ranklist" id="rkList"></div>'
     + '<div class="fo-actions" style="max-width:none;margin-top:4px">'
     + '<button class="fo-btn primary" id="rkStarTop" style="background:#f3c24b;color:#0d0c10">⭐ Star top 3</button>'
     + (results.length > 4 ? '<button class="fo-btn danger" id="rkRejectBottom">✕ Reject bottom ' + Math.floor(results.length / 2) + '</button>' : '')
@@ -3387,6 +3397,24 @@ async function foRenderRanked(results){
     }
     showToast('Rejected ' + bottom.length + ' \u00b7 recover in the Rejected filter');
     closeFaceoff(); renderFilters(); renderGrid();
+  };
+  const fin = document.getElementById('rkFinal');
+  if(fin) fin.onclick = async () => {
+    if(fin.disabled) return;
+    fin.disabled = true;
+    fin.innerHTML = '<b>Comparing the top 12…</b>';
+    try {
+      const built = await aiChunkContent(results.slice(0, AI_CHUNK).map(r => r.id), 460);
+      if(!built) throw new Error('Couldn\u2019t prepare the images');
+      const re = aiParse(await _withTimeout(aiCallNow(built.content), 120000, 'Claude took too long'), built.ids);
+      await aiSaveScores(re, aiGetModel());
+      const byId = {}; re.forEach(r => { byId[r.id] = r; });
+      const merged = results.map(r => byId[r.id] || r).sort((a, b) => b.score - a.score);
+      if(faceoff) foRenderRanked(merged, {final: true});
+    } catch(e){
+      fin.disabled = false;
+      fin.innerHTML = '<b>Final round didn\u2019t work \u2014 tap to try again</b>';
+    }
   };
   document.getElementById('rkDone').onclick = () => {
     // Switch the library to Claude's order so closing the sheet lands somewhere that
@@ -3600,6 +3628,18 @@ function updateViewerUI(){
   if(_szBtn){
     const eff = resolvedSize(d, state.settings);
     _szBtn.textContent = sizeLabelFor(eff);
+  }
+  // v14.55: Claude's verdict right under the shirt, instead of hidden in the long-press menu
+  const hint = document.getElementById('viewerHint');
+  if(hint){
+    if(d.aiScore !== undefined && d.aiScore !== null){
+      hint.innerHTML = '<b style="color:#f3c24b">Claude ' + Number(d.aiScore).toFixed(1) + '/10</b> \u00b7 '
+        + String(d.aiReason || '').replace(/[<>]/g,'');
+      hint.classList.add('ai');
+    } else {
+      hint.textContent = 'Tap = Preview / Original  \u2022  Swipe = next  \u2022  Long-press = options';
+      hint.classList.remove('ai');
+    }
   }
   $('vaKeep').classList.toggle('on', d.status === 'round1');
   $('vaFix').classList.toggle('on', d.status === 'needs_fixing');
