@@ -119,6 +119,8 @@
   .fo-opt.gold{background:rgba(243,194,75,.14);border-color:rgba(243,194,75,.4)}
   .fo-opt b{display:block;font-size:14.5px;font-weight:800;margin-bottom:3px}
   .fo-opt span{font-size:11.5px;color:rgba(255,255,255,.6);line-height:1.4}
+  .ai-bar{width:100%;max-width:260px;height:6px;border-radius:3px;background:rgba(255,255,255,.12);overflow:hidden;margin:2px auto 4px}
+  .ai-bar i{display:block;height:100%;width:0;background:#f3c24b;transition:width .35s ease}
   .fo-ranklist{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:9px;padding-bottom:10px}
   .rk{display:flex;gap:11px;align-items:flex-start;background:var(--panel,#161419);
     border:1px solid rgba(255,255,255,.1);border-radius:13px;padding:9px}
@@ -529,7 +531,7 @@
       <div style="font-size:11px;color:rgba(255,255,255,.45);margin-top:6px;line-height:1.4">Clear overrides so the global Size / Shirt Color settings actually apply to all cards.</div>
 
       <h3 style="margin-top:16px">🤖 Claude AI judge</h3>
-      <div style="font-size:11px;color:rgba(255,255,255,.55);line-height:1.45">Lets Claude actually look at two designs in Face-off and say which prints better, and why. You need a free Anthropic account key. Tap <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" style="color:#f3c24b;font-weight:700">console.anthropic.com/settings/keys</a> → <b>Create Key</b> → copy it → paste below. It starts with <b>sk-ant-</b>. Billed per use (~8¢ for 20 designs, ~30¢ for 100), separate from your Claude subscription. Stored only on this phone.</div>
+      <div style="font-size:11px;color:rgba(255,255,255,.55);line-height:1.45">Lets Claude actually look at two designs in Face-off and say which prints better, and why. You need a free Anthropic account key. Tap <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener" style="color:#f3c24b;font-weight:700">console.anthropic.com/settings/keys</a> → <b>Create Key</b> → copy it → paste below. It starts with <b>sk-ant-</b>. Billed per use, separate from your Claude subscription. Stored only on this phone.</div>
       <div class="aikey-row">
         <input type="password" id="aiKeyInput" placeholder="sk-ant-..." autocomplete="off" autocapitalize="off" spellcheck="false">
         <button id="aiKeySave">Save</button>
@@ -537,8 +539,8 @@
       <div style="font-size:11px;margin-top:6px" id="aiKeyStatus"></div>
       <select class="libsort" id="aiModelSel" style="width:100%;height:40px;margin-top:10px">
         <option value="claude-opus-5-5">Opus 5.5 — best judgment</option>
-        <option value="claude-sonnet-5-5">Sonnet 5.5 — good, half the cost</option>
-        <option value="claude-haiku-5-5">Haiku 5.5 — fast, ~30x cheaper</option>
+        <option value="claude-sonnet-5-5">Sonnet 5.5 — good, cheaper</option>
+        <option value="claude-haiku-5-5">Haiku 5.5 — fastest, cheapest</option>
       </select>
       <div style="font-size:11px;color:rgba(255,255,255,.5);margin-top:6px" id="aiModelCost"></div>
 
@@ -1173,7 +1175,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.47 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.48 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -2534,46 +2536,6 @@ function startFaceoff(explicitIds){
   // tapping through a whole bracket.
   foNext();
 }
-function foRenderChoose(){
-  const f = faceoff; if(!f) return;
-  const t = document.getElementById('foTitle'), sub = document.getElementById('foSub');
-  if(t) t.textContent = 'How do you want to decide?';
-  if(sub) sub.textContent = f.all.length + ' designs in play';
-  const u = document.getElementById('foUndo'); if(u) u.disabled = true;
-  document.getElementById('foBody').innerHTML =
-    '<div class="fo-choose"><h4>' + f.all.length + ' designs</h4>' +
-    '<p>Let Claude look at them all and rank them, or go through two at a time yourself.</p>' +
-    '<button class="fo-opt gold" id="foModeAI"><b>🤖 Let Claude rank all ' + f.all.length + (aiGetKey() ? '' : ' (needs key)') + '</b>' +
-    '<span>Claude looks at every design and puts the best on top, with a reason for each. About ' + aiEstimate(f.all.length) + '.</span></button>' +
-    '<button class="fo-opt" id="foModeManual"><b>👆 I\u2019ll pick, two at a time</b>' +
-    '<span>The knockout. ' + (f.all.length - 1) + ' taps to crown one champion.</span></button></div>';
-  document.getElementById('foModeAI').onclick = () => {
-    if(!aiGetKey()){
-      document.getElementById('foBody').innerHTML =
-        '<div class="fo-choose"><h4>Claude needs a key first</h4>' +
-        '<p>One-time setup:<br><br>1. Go to <b>console.anthropic.com/settings/keys</b><br>2. Tap <b>Create Key</b>, copy it<br>3. Here in TeeSort: <b>Settings</b> (gear, top right) → <b>🤖 Claude AI judge</b> → paste → Save<br><br>Then come back. ~8¢ for 20 designs, ~30¢ for 100.</p>' +
-        '<button class="fo-opt" id="foBackChoose"><b>← Back</b><span>Pick two at a time instead.</span></button></div>';
-      const bk = document.getElementById('foBackChoose'); if(bk) bk.onclick = foRenderChoose;
-      return;
-    }
-    // Big batches cost real money and take real minutes - say so before spending it.
-    const n = f.all.length;
-    if(n > 30 && !f.bigOk){
-      const est = aiEstimate(n);
-      document.getElementById('foBody').innerHTML =
-        '<div class="fo-choose"><h4>' + n + ' designs</h4>' +
-        '<p>That\u2019s roughly <b>' + est + '</b> on ' + (AI_MODELS[aiGetModel()]||{}).label + ', and a few minutes.<br><br>Change the model in Settings to spend less.</p>' +
-        '<button class="fo-opt gold" id="foBigYes"><b>Go ahead</b><span>Rank all ' + n + '.</span></button>' +
-        '<button class="fo-opt" id="foBigNo"><b>\u2190 Back</b><span>Select fewer first.</span></button></div>';
-      const y = document.getElementById('foBigYes');
-      if(y) y.onclick = () => { f.bigOk = true; foRunAIRank(); };
-      const no = document.getElementById('foBigNo'); if(no) no.onclick = foRenderChoose;
-      return;
-    }
-    foRunAIRank();
-  };
-  document.getElementById('foModeManual').onclick = () => foNext();
-}
 function closeFaceoff(){ const o = document.getElementById('foOverlay'); if(o) o.classList.remove('open'); faceoff = null; }
 function foRemaining(){ const f = faceoff; return f.pool.length + f.pending.length + 2; }
 function foNext(){
@@ -2856,8 +2818,8 @@ const AI_MODEL_STORE = 'teesort_ai_model';
 // the prompt, and ~50 output tokens per design including low-effort thinking.
 const AI_MODELS = {
   'claude-opus-5-5':   {label:'Opus 5.5 — best judgment', per: 0.002},
-  'claude-sonnet-5-5': {label:'Sonnet 5.5 — good, half the cost', per: 0.001},
-  'claude-haiku-5-5':  {label:'Haiku 5.5 — fast, ~30x cheaper', per: 0.00006}
+  'claude-sonnet-5-5': {label:'Sonnet 5.5 — good, cheaper', per: 0.001},
+  'claude-haiku-5-5':  {label:'Haiku 5.5 — fastest, cheapest', per: 0.00006}
 };
 function aiGetModel(){
   try { const m = localStorage.getItem(AI_MODEL_STORE); if(m && AI_MODELS[m]) return m; } catch(e){}
@@ -2937,8 +2899,8 @@ async function aiJudgePair(urlA, urlB){
 // scored on the same 0-10 rubric, then chunks are merged by score. With more than one
 // chunk the top of the pile is re-scored together so the final order is apples-to-apples.
 const AI_CHUNK = 12;          // designs per request
-const AI_NOW_MAX = 24;        // up to this many: rank right now, results in ~30s
-const AI_SUBMIT_SLICE = 120;  // designs per background upload (a swipe-away loses at most one slice)
+const AI_NOW_MAX = 36;        // up to this many: rank right away (~a minute)
+const AI_SUBMIT_SLICE = 48;   // designs per upload piece - small, so progress moves steadily and leaving early loses little
 const AI_BATCH_STORE = 'teesort_ai_batches';
 function aiHeaders(){
   return {'content-type':'application/json','x-api-key':aiGetKey(),'anthropic-version':'2023-06-01',
@@ -3057,7 +3019,7 @@ async function aiRankNow(ids, onProgress){
       if(/Key rejected|Out of API credit/.test(e.message)) throw e;   // nothing else will work either
       failed += c.length; lastErr = e;
     }
-    done += c.length; if(onProgress) onProgress(done / ids.length);
+    done += c.length; if(onProgress) onProgress(done, ids.length);
   }
   out.sort((a, b) => b.score - a.score);
   // Two chunks were scored separately; re-judge the leaders side by side so the top of
@@ -3118,7 +3080,7 @@ function aiBatchStatusRender(){
   if(!all.length){ el.style.display = 'none'; return; }
   const n = all.reduce((a, b) => a + (b.n || 0), 0);
   el.style.display = 'block';
-  el.textContent = '🤖 Claude is ranking ' + n + ' in the background · usually under an hour · tap to check';
+  el.textContent = '🤖 Claude is ranking ' + n + ' · tap to check';
 }
 let aiChecking = false, aiDesignsLoaded = false;
 // Pull finished background runs. Safe to call often: on launch, on returning to the app,
@@ -3186,7 +3148,7 @@ function rankEntry(){
   foEl().classList.add('open');
   const u = document.getElementById('foUndo'); if(u) u.disabled = true;
   if(!aiGetKey()){ aiRenderNeedKey(); return; }
-  if(ids.length <= AI_NOW_MAX) aiRunNowUI(ids); else aiRenderBackgroundConfirm(ids);
+  if(ids.length <= AI_NOW_MAX) aiRunNowUI(ids); else aiRunBackgroundUI(ids);
 }
 function aiRenderNeedKey(){
   const t = document.getElementById('foTitle'), sub = document.getElementById('foSub');
@@ -3198,88 +3160,55 @@ function aiRenderNeedKey(){
 async function aiRunNowUI(ids){
   const t = document.getElementById('foTitle'), sub = document.getElementById('foSub');
   if(t) t.textContent = 'Claude is looking…';
-  if(sub) sub.textContent = ids.length + ' designs · about ' + aiEstimate(ids.length);
+  if(sub) sub.textContent = '';
   const body = document.getElementById('foBody');
-  body.innerHTML = '<div class="fo-choose"><h4 id="aiPct">0%</h4>'
-    + '<p>Usually under a minute. Leave this open until it finishes.</p></div>';
+  body.innerHTML = '<div class="fo-choose"><h4 id="aiCount">0 / ' + ids.length + '</h4>'
+    + '<div class="ai-bar"><i id="aiBar"></i></div>'
+    + '<p>Keep the app open — about a minute.</p></div>';
   try {
-    const r = await aiRankNow(ids, f => { const e = document.getElementById('aiPct'); if(e) e.textContent = Math.round(f * 100) + '%'; });
+    const r = await aiRankNow(ids, (done, total) => {
+      const c = document.getElementById('aiCount'); if(c) c.textContent = done + ' / ' + total;
+      const bar = document.getElementById('aiBar'); if(bar) bar.style.width = Math.round(done / total * 100) + '%';
+    });
     if(!faceoff) return;
-    if(!r.results.length) throw (r.lastErr || new Error('Claude returned nothing to rank'));
-    if(r.failed) showToast(r.failed + ' couldn’t be scored — select & rank them again');
+    if(!r.results.length) throw (r.lastErr || new Error('Claude returned nothing'));
+    if(r.failed) showToast(r.failed + ' couldn’t be scored — rank them again');
     foRenderRanked(r.results);
   } catch(err){
     if(!faceoff) return;
     if(t) t.textContent = 'Couldn’t rank';
-    body.innerHTML = '<div class="fo-choose"><h4>Hmm</h4><p>' + String((err && err.message) || 'Something went wrong').replace(/[<>]/g,'') + '</p>'
-      + '<button class="fo-opt" id="aiRetry"><b>Try again</b><span>Same designs.</span></button></div>';
+    body.innerHTML = '<div class="fo-choose"><p>' + String((err && err.message) || 'Something went wrong').replace(/[<>]/g,'') + '</p>'
+      + '<button class="fo-opt" id="aiRetry"><b>Try again</b></button></div>';
     const rb = document.getElementById('aiRetry'); if(rb) rb.onclick = () => aiRunNowUI(ids);
   }
-}
-function aiRenderBackgroundConfirm(ids){
-  const scored = ids.filter(id => { const d = state.designs.find(x => x.id === id); return d && d.aiScore !== undefined; });
-  const fresh = ids.filter(id => !scored.includes(id));
-  const t = document.getElementById('foTitle'), sub = document.getElementById('foSub');
-  if(t) t.textContent = 'Rank ' + ids.length + ' designs';
-  if(sub) sub.textContent = (AI_MODELS[aiGetModel()] || {}).label || '';
-  // The batch queue is a trade: the judging itself takes minutes, but Anthropic runs it
-  // when they have spare capacity, which is why it's half price. Say that plainly, and
-  // for medium batches offer the fast path too.
-  let html = '<div class="fo-choose">'
-    + '<p><b>In the background</b> goes to Anthropic’s batch queue: you can close the app once it says '
-    + '<b>Sent ✓</b>. The judging takes minutes, but the queue runs when they have spare capacity — '
-    + 'often quick, within an hour for most, 24h at worst. That wait is why it’s <b>half price</b>.</p>';
-  if(scored.length && fresh.length){
-    html += '<button class="fo-opt gold" id="bgFresh"><b>In the background: the ' + fresh.length + ' new ones · ~' + aiEstimate(fresh.length, true) + '</b>'
-         + '<span>Skips ' + scored.length + ' Claude already scored.</span></button>'
-         + '<button class="fo-opt" id="bgAll"><b>In the background: all ' + ids.length + ' · ~' + aiEstimate(ids.length, true) + '</b><span>Re-ranks the ones already scored too.</span></button>';
-  } else {
-    html += '<button class="fo-opt gold" id="bgAll"><b>In the background · ~' + aiEstimate(ids.length, true) + '</b><span>' + ids.length + ' designs. Close the app once sent.</span></button>';
-  }
-  if(ids.length <= 100){
-    const mins = Math.max(1, Math.round(ids.length / 30));
-    html += '<button class="fo-opt" id="bgNow"><b>Right now · ~' + aiEstimate(ids.length) + '</b>'
-         + '<span>Done in about ' + mins + ' min, but keep the app open the whole time. Full price.</span></button>';
-  }
-  html += '</div>';
-  document.getElementById('foBody').innerHTML = html;
-  const bn = document.getElementById('bgNow'); if(bn) bn.onclick = () => aiRunNowUI(ids);
-  const bf = document.getElementById('bgFresh'); if(bf) bf.onclick = () => aiRunBackgroundUI(fresh);
-  const ba = document.getElementById('bgAll'); if(ba) ba.onclick = () => aiRunBackgroundUI(ids);
 }
 async function aiRunBackgroundUI(ids){
   const t = document.getElementById('foTitle'), sub = document.getElementById('foSub');
   if(t) t.textContent = 'Sending to Claude…';
-  if(sub) sub.textContent = ids.length + ' designs';
+  if(sub) sub.textContent = '';
   const body = document.getElementById('foBody');
-  // Counts, not a percentage: the old % tracked only preview prep, so it read 100%
-  // while the slow upload was still going - an invitation to leave too early.
-  body.innerHTML = '<div class="fo-choose"><h4 id="aiSent">0 of ' + ids.length + ' sent</h4>'
-    + '<p id="aiStage">Getting ready…</p>'
-    + '<p style="color:#f3c24b;font-weight:700">Don’t leave the app until this says “Sent ✓”.</p>'
-    + '<p style="font-size:11.5px;opacity:.65">Sent in pieces of 120 — anything already sent still gets ranked if you leave early.</p></div>';
+  // One bar for the whole job: half for preparing previews, half for uploading them.
+  body.innerHTML = '<div class="fo-choose"><h4 id="aiCount">Sending ' + ids.length + '</h4>'
+    + '<div class="ai-bar"><i id="aiBar"></i></div>'
+    + '<p style="color:#f3c24b;font-weight:700">Keep the app open until it says Sent.</p></div>';
   try {
     const n = await aiRankBackground(ids, (p) => {
-      const a = document.getElementById('aiSent'); if(a) a.textContent = p.sent + ' of ' + p.total + ' sent';
-      const st = document.getElementById('aiStage'); if(!st) return;
-      if(p.stage === 'prep')   st.textContent = 'Preparing previews — ' + p.prepared + ' of ' + p.total + '…';
-      if(p.stage === 'upload') st.textContent = 'Uploading… (the slow part on cellular)';
-      if(p.stage === 'sent')   st.textContent = p.sent < p.total ? 'Preparing the next piece…' : 'Finishing…';
+      const bar = document.getElementById('aiBar');
+      if(bar) bar.style.width = Math.round((p.prepared + p.sent) / (2 * p.total) * 100) + '%';
     });
     if(!faceoff) return;
-    if(t) t.textContent = 'Sent ✓ — you can close the app';
-    if(sub) sub.textContent = '';
-    body.innerHTML = '<div class="fo-choose"><h4>Sent ✓ — all ' + n + ' are with Claude</h4>'
-      + '<p>Close TeeSort, lock your phone, whatever. When they’re done they’ll be waiting next time you open the app, sorted best-first. The gold line under the version number shows what’s still running.</p>'
-      + '<button class="fo-opt" id="bgOk"><b>Got it</b><span>Back to the grid.</span></button></div>';
+    if(t) t.textContent = 'Sent ✓';
+    body.innerHTML = '<div class="fo-choose"><h4>Sent ✓</h4>'
+      + '<p>You can close the app. Claude’s ranking shows up here when it’s done.</p>'
+      + '<button class="fo-opt" id="bgOk"><b>Got it</b></button></div>';
     const ok = document.getElementById('bgOk'); if(ok) ok.onclick = () => { closeFaceoff(); renderGrid(); };
   } catch(err){
     if(!faceoff) return;
     const queued = aiBatchesGet().reduce((a, b) => a + (b.n || 0), 0);
     if(t) t.textContent = queued ? 'Partly sent' : 'Couldn’t send';
-    body.innerHTML = '<div class="fo-choose"><h4>' + (queued ? queued + ' made it' : 'Hmm') + '</h4><p>'
-      + String((err && err.message) || 'Something went wrong').replace(/[<>]/g,'')
-      + (queued ? '<br><br>Those will still be ranked. Select the rest and rank again to send them.' : '') + '</p></div>';
+    body.innerHTML = '<div class="fo-choose"><p>'
+      + (queued ? queued + ' were sent and will still be ranked. ' : '')
+      + String((err && err.message) || 'Something went wrong').replace(/[<>]/g,'') + '</p></div>';
   }
 }
 async function foRenderRanked(results){
@@ -3402,7 +3331,7 @@ function aiModelRender(){
   const sel = document.getElementById('aiModelSel');
   if(sel) sel.value = aiGetModel();
   const c = document.getElementById('aiModelCost');
-  if(c) c.innerHTML = 'Estimated <b>' + aiEstimate(20) + '</b> for 20 now \u00b7 <b>' + aiEstimate(900, true) + '</b> for 900 in the background (half price).';
+  if(c) c.innerHTML = 'Your real spend shows at console.anthropic.com \u2192 Usage.';
 }
 const _aiMdl = document.getElementById('aiModelSel');
 if(_aiMdl) _aiMdl.onchange = () => { aiSetModel(_aiMdl.value); aiModelRender(); showToast('Using ' + (AI_MODELS[aiGetModel()]||{}).label); };
