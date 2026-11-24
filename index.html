@@ -69,7 +69,10 @@
     justify-content:center;color:#fff;font-size:15px;font-weight:800}
   body.selmode .card .selmark{display:flex}
   body.selmode .card.selected .selmark{background:#f3c24b;color:#0d0c10;border-color:#f3c24b}
-  body.selmode .card-preview{pointer-events:none}
+  body.selmode .card *{pointer-events:none !important}
+  body.selmode .card{pointer-events:auto;cursor:pointer}
+  body.selmode .grid{touch-action:pan-y}
+  body.selmode main{-webkit-user-select:none;user-select:none}
   .selbar{position:fixed;left:0;right:0;bottom:0;z-index:45;display:none;gap:6px;padding:9px 10px
     calc(9px + env(safe-area-inset-bottom));background:rgba(14,13,16,.97);border-top:1px solid rgba(255,255,255,.12);
     align-items:center;overflow-x:auto;scrollbar-width:none}
@@ -1168,7 +1171,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.42 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.45 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -2509,6 +2512,11 @@ function foUndo(){
   foRenderPair();
 }
 function startFaceoff(explicitIds){
+  // If a selection exists, that IS the batch. Ranking the whole filter by accident is
+  // how you end up pointed at 800 designs.
+  if((!explicitIds || !explicitIds.length) && typeof selected !== 'undefined' && selected.size){
+    explicitIds = Array.from(selected);
+  }
   const pool0 = explicitIds && explicitIds.length
     ? explicitIds.map(id => state.designs.find(x => x.id === id)).filter(Boolean)
     : getFiltered();
@@ -2656,9 +2664,16 @@ async function foChampion(id){
   });
 }
 
-// ===== v14.38 multi-select: tap or drag across cards to pick a batch =====
+// ===== v14.43 multi-select, rebuilt =====
+// The first version had four real bugs on iOS: the page scrolled under the finger so a
+// sweep hit the top row then whatever landed under it; the sweep INVERTED (after
+// "All shown" every drag deselected); taps fell through to the card and opened the
+// viewer; and Rank ignored the selection and tried to do all 800+. This version works
+// like Photos: drag always ADDS, the page is pinned during a drag with auto-scroll at
+// the edges, every child is click-proofed, and Rank uses the selection.
 const selected = new Set();
-let selMode = false, selDragging = false, selDragVal = true;
+let selMode = false, selDrag = false, selAutoTimer = null;
+function selCount(){ return selected.size; }
 function selSync(){
   const c = document.getElementById('selCount');
   if(c) c.textContent = selected.size + ' selected';
@@ -2671,40 +2686,106 @@ function selSetMode(on){
   document.body.classList.toggle('selmode', on);
   const b = document.getElementById('selToggle');
   if(b){ b.classList.toggle('on', on); b.textContent = on ? 'Done' : 'Select'; }
-  if(!on) selected.clear();
+  if(!on){ selected.clear(); selStopAuto(); }
   selSync();
+  if(on) showToast('Drag across designs to select · tap one to toggle');
 }
-function selToggleId(id, force){
-  if(!id) return;
-  const want = (force === undefined) ? !selected.has(id) : force;
-  if(want) selected.add(id); else selected.delete(id);
+function selAdd(id){
+  if(!id || selected.has(id)) return;
+  selected.add(id);
   const el = document.querySelector('.card[data-id="' + id + '"]');
-  if(el) el.classList.toggle('selected', want);
+  if(el) el.classList.add('selected');
   const c = document.getElementById('selCount');
   if(c) c.textContent = selected.size + ' selected';
 }
-// Drag across cards to sweep a bunch at once.
+function selToggleOne(id){
+  if(!id) return;
+  if(selected.has(id)){
+    selected.delete(id);
+    const el = document.querySelector('.card[data-id="' + id + '"]');
+    if(el) el.classList.remove('selected');
+  } else selAdd(id);
+  const c = document.getElementById('selCount');
+  if(c) c.textContent = selected.size + ' selected';
+}
+function selStopAuto(){ if(selAutoTimer){ clearInterval(selAutoTimer); selAutoTimer = null; } }
+// Keep scrolling while the finger is held near the top or bottom edge, like Photos.
+function selEdgeScroll(y){
+  const EDGE = 90, H = window.innerHeight;
+  let dir = 0;
+  if(y < EDGE) dir = -1; else if(y > H - EDGE) dir = 1;
+  if(!dir){ selStopAuto(); return; }
+  if(selAutoTimer) return;
+  selAutoTimer = setInterval(() => { window.scrollBy(0, dir * 14); }, 16);
+}
 (function(){
   const m = document.getElementById('main'); if(!m) return;
   const cardAt = (x, y) => {
     const el = document.elementFromPoint(x, y);
-    return el && el.closest ? el.closest('.card') : null;
+    return (el && el.closest) ? el.closest('.card') : null;
   };
-  m.addEventListener('pointerdown', e => {
+  const idAt = (x, y) => { const c = cardAt(x, y); return c ? c.getAttribute('data-id') : null; };
+  let movedEnough = false, startX = 0, startY = 0, startId = null;
+
+  m.addEventListener('touchstart', e => {
+    if(!selMode || !e.touches[0]) return;
+    const t = e.touches[0];
+    startX = t.clientX; startY = t.clientY;
+    startId = idAt(startX, startY);
+    selDrag = !!startId;
+    movedEnough = false;
+  }, {passive:true});
+
+  // Non-passive so the page can be pinned while sweeping.
+  m.addEventListener('touchmove', e => {
+    if(!selMode || !selDrag || !e.touches[0]) return;
+    const t = e.touches[0];
+    if(!movedEnough){
+      if(Math.abs(t.clientX - startX) < 10 && Math.abs(t.clientY - startY) < 10) return;
+      movedEnough = true;
+      selAdd(startId);                 // the card the sweep began on
+    }
+    e.preventDefault();                // stop the page sliding under the finger
+    selAdd(idAt(t.clientX, t.clientY));
+    selEdgeScroll(t.clientY);
+  }, {passive:false});
+
+  let lastWasDrag = false;
+  const endDrag = () => {
+    lastWasDrag = movedEnough;
+    selDrag = false; movedEnough = false; selStopAuto();
+  };
+  m.addEventListener('touchend', endDrag);
+  m.addEventListener('touchcancel', endDrag);
+
+  // Desktop/trackpad parity
+  m.addEventListener('mousedown', e => {
     if(!selMode) return;
-    const card = cardAt(e.clientX, e.clientY); if(!card) return;
-    const id = card.getAttribute('data-id');
-    selDragging = true; selDragVal = !selected.has(id);
-    selToggleId(id, selDragVal);
+    startId = idAt(e.clientX, e.clientY);
+    if(!startId) return;
+    selDrag = true; movedEnough = false; startX = e.clientX; startY = e.clientY;
+    e.preventDefault();
   });
-  m.addEventListener('pointermove', e => {
-    if(!selMode || !selDragging) return;
-    const card = cardAt(e.clientX, e.clientY); if(!card) return;
-    selToggleId(card.getAttribute('data-id'), selDragVal);
+  m.addEventListener('mousemove', e => {
+    if(!selMode || !selDrag) return;
+    if(!movedEnough){
+      if(Math.abs(e.clientX - startX) < 10 && Math.abs(e.clientY - startY) < 10) return;
+      movedEnough = true; selAdd(startId);
+    }
+    selAdd(idAt(e.clientX, e.clientY));
   });
-  const end = () => { selDragging = false; };
-  m.addEventListener('pointerup', end);
-  m.addEventListener('pointercancel', end);
+  window.addEventListener('mouseup', () => { if(selMode) endDrag(); });
+
+  // One place owns the tap: swallow the click so nothing underneath can open the
+  // viewer, then toggle - unless the gesture was a sweep, which already selected.
+  m.addEventListener('click', e => {
+    if(!selMode) return;
+    e.preventDefault(); e.stopPropagation();
+    if(lastWasDrag){ lastWasDrag = false; startId = null; return; }
+    const id = idAt(e.clientX, e.clientY) || startId;
+    startId = null;
+    selToggleOne(id);
+  }, true);
 })();
 function selWire(id, fn){ const e = document.getElementById(id); if(e) e.onclick = fn; }
 selWire('selToggle', () => selSetMode(!selMode));
@@ -2712,11 +2793,11 @@ selWire('selDone', () => selSetMode(false));
 selWire('selNone', () => { selected.clear(); selSync(); });
 selWire('selAll', () => { getFiltered().forEach(d => selected.add(d.id)); selSync(); });
 selWire('selRank', () => {
-  if(!selected.size){ showToast('Tap some designs first'); return; }
+  if(!selected.size){ showToast('Drag across some designs first'); return; }
   startFaceoff(Array.from(selected));
 });
 async function selApply(fn, label){
-  if(!selected.size){ showToast('Tap some designs first'); return; }
+  if(!selected.size){ showToast('Drag across some designs first'); return; }
   const ids = Array.from(selected);
   for(const id of ids){
     const d = state.designs.find(x => x.id === id);
@@ -2899,7 +2980,17 @@ async function aiRankBatch(ids, onProgress){
     })).filter(r => r.id);
   };
   let out = [];
-  for(const c of chunks) out = out.concat(await scoreChunk(c));
+  for(const c of chunks){
+    const part = await scoreChunk(c);
+    out = out.concat(part);
+    // Save as we go: iOS suspends a backgrounded PWA mid-run, and losing twenty
+    // minutes of paid scoring to a swipe-away is not acceptable.
+    const now = Date.now();
+    for(const r of part){
+      const d = state.designs.find(x => x.id === r.id);
+      if(d){ d.aiScore = r.score; d.aiReason = r.reason; d.aiRankedAt = now; await persistDesign(d); }
+    }
+  }
   out.sort((a, b) => b.score - a.score);
   // Re-score the leaders together so cross-chunk order is trustworthy.
   if(chunks.length > 1 && out.length > 2){
@@ -2920,7 +3011,10 @@ async function foRunAIRank(){
   if(t) t.textContent = 'Claude is looking...';
   const body = document.getElementById('foBody');
   body.innerHTML = '<div class="fo-choose"><h4 id="aiPct">0%</h4>'
-    + '<p id="aiProg">Sending ' + ids.length + ' designs to Claude. Hang tight.</p></div>';
+    + '<p id="aiProg">Claude is looking at ' + ids.length + ' designs on '
+    + ((AI_MODELS[aiGetModel()]||{}).label || 'Claude') + '.</p>'
+    + '<p style="color:#f3c24b;font-weight:600">Keep this screen open \u2014 iPhone pauses the app if you swipe away, and the run stops.</p>'
+    + '<p style="font-size:11px;opacity:.6">Scores are saved as each batch finishes, so nothing already done is lost.</p></div>';
   const setP = (frac) => {
     const e = document.getElementById('aiPct'); if(e) e.textContent = Math.round(frac * 100) + '%';
   };
@@ -2931,7 +3025,16 @@ async function foRunAIRank(){
     foRenderRanked(results);
   } catch(err){
     if(!faceoff) return;
-    if(t) t.textContent = 'Could not rank';
+    if(t) t.textContent = 'Stopped early';
+    const done = ids.map(id => state.designs.find(x => x.id === id))
+                    .filter(d => d && d.aiScore !== undefined)
+                    .sort((a,b) => b.aiScore - a.aiScore)
+                    .map(d => ({id:d.id, score:d.aiScore, reason:d.aiReason}));
+    if(done.length){
+      showToast('Stopped, but kept ' + done.length + ' already scored');
+      foRenderRanked(done);
+      return;
+    }
     body.innerHTML = '<div class="fo-choose"><h4>Hmm</h4><p>' +
       String((err && err.message) || 'Something went wrong').replace(/[<>]/g,'') + '</p>' +
       '<button class="fo-opt" id="aiRetry"><b>Try again</b><span>Resend the same designs.</span></button>' +
