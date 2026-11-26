@@ -71,7 +71,7 @@
     justify-content:center;color:#fff;font-size:15px;font-weight:800}
   body.selmode .card .selmark{display:flex}
   body.selmode .card.selected .selmark{background:#f3c24b;color:#0d0c10;border-color:#f3c24b}
-  body.selmode .card *{pointer-events:none !important}
+  body.selmode .grid .card *{pointer-events:none !important}
   body.selmode .card{pointer-events:auto;cursor:pointer}
   body.selmode .grid{touch-action:manipulation}
   body.selmode main{-webkit-user-select:none;user-select:none}
@@ -235,9 +235,9 @@
   .toast .pulse{width:6px;height:6px;border-radius:50%;background:#000;animation:pulse 1s infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.3}}
 
-  .sheet-bg{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:40;opacity:0;pointer-events:none;transition:opacity .2s}
+  .sheet-bg{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:46;opacity:0;pointer-events:none;transition:opacity .2s}
   .sheet-bg.open{opacity:1;pointer-events:auto}
-  .sheet{position:fixed;left:0;right:0;bottom:0;max-width:520px;margin:0 auto;background:#141417;border-radius:22px 22px 0 0;z-index:41;transform:translateY(100%);transition:transform .28s cubic-bezier(.32,.72,0,1);max-height:88vh;overflow-y:auto;padding-bottom:env(safe-area-inset-bottom)}
+  .sheet{position:fixed;left:0;right:0;bottom:0;max-width:520px;margin:0 auto;background:#141417;border-radius:22px 22px 0 0;z-index:47;transform:translateY(100%);transition:transform .28s cubic-bezier(.32,.72,0,1);max-height:88vh;overflow-y:auto;padding-bottom:env(safe-area-inset-bottom)}
   .sheet.open{transform:translateY(0)}
   /* v14.64: opened from the full-screen viewer too, so they must sit above it (48) */
   #cardActionsBg{z-index:52} #cardActionsSheet{z-index:53}
@@ -917,7 +917,7 @@ try {
   if(s){
     state.settings = {...state.settings, ...s};
     if(!['auto','12x16','15x18','full'].includes(state.settings.size)) state.settings.size = 'auto';
-    if(state.settings.knockout > 60) state.settings.knockout = 30;
+    if(!(state.settings.knockout >= 0 && state.settings.knockout <= 100)) state.settings.knockout = 30;
     delete state.settings.vOffset;  // removed from global
   }
   // v12 one-time: correct the global size setting to 15x18 (older builds left it stuck on Full)
@@ -1220,7 +1220,14 @@ async function composite(d, settings, outputW){
   outC.width = W; outC.height = cropH;
   outC.getContext('2d').drawImage(canvas, 0, cropTop, W, cropH, 0, 0, W, cropH);
   const dataURL = outC.toDataURL('image/jpeg', 0.86);
+  // v14.65: free the scratch canvases now instead of waiting for iOS to get round to it
+  canvas.width = 0; gC.width = 0; prC.width = 0; outC.width = 0;
   if(compositeCache.size >= CACHE_LIMIT) compositeCache.delete(compositeCache.keys().next().value);
+  if(outputW > 700){
+    // Viewer/export-size pictures are several hundred KB each: keep only the last few.
+    const big = [...compositeCache.keys()].filter(k => +k.split('|').pop() > 700);
+    while(big.length >= 8) compositeCache.delete(big.shift());
+  }
   compositeCache.set(key, dataURL);
   d._lastZone = zoneKey;
   return dataURL;
@@ -1268,11 +1275,11 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.64 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.65 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
-  const counts = {all: state.designs.length, inbox: 0};
+  const counts = {all: state.designs.filter(d => d.status !== 'rejected' && d.status !== 'archived').length, inbox: 0};
   state.designs.forEach(d => {
     const k = d.status === 'inbox' || !STATUSES.includes(d.status) ? 'inbox' : d.status;
     counts[k] = (counts[k]||0) + 1;
@@ -1558,7 +1565,7 @@ function attachCardHandlers(id){
       const d = state.designs.find(x => x.id === id);
       if(!d) return;
       d.finalist = !d.finalist;
-      await persistDesign(d);
+      persistSoon(d);
       star.classList.toggle('on', d.finalist);
       el.classList.toggle('is-finalist', d.finalist);
       renderFilters();
@@ -1577,7 +1584,7 @@ function attachCardHandlers(id){
       if(!dd) return;
       dd.side = 'front';
       invalidateCache(id);
-      await persistDesign(dd);
+      persistSoon(dd);
       updateCardShirtBadgeInPlace(dd);
       renderCardComposite(id);
     });
@@ -1685,10 +1692,10 @@ function updateCardStatusInPlace(d){
   // Update status badge
   const tr = el.querySelector('.card-tr');
   if(tr){
+    // v14.65: replace only the badge - wiping the whole corner also deleted the ★ button
+    const old = tr.querySelector('.badge.status'); if(old) old.remove();
     if(d.status && d.status !== 'inbox'){
-      tr.innerHTML = `<span class="badge status status-${d.status}"><span class="label">${STATUS_LABELS[d.status]||d.status}</span></span>`;
-    } else {
-      tr.innerHTML = '';
+      tr.insertAdjacentHTML('beforeend', `<span class="badge status status-${d.status}"><span class="label">${STATUS_LABELS[d.status]||d.status}</span></span>`);
     }
   }
 }
@@ -1719,7 +1726,7 @@ function updateCardShirtBadgeInPlace(d){
         if(!dd) return;
         dd.side = 'front';
         invalidateCache(d.id);
-        await persistDesign(dd);
+        persistSoon(dd);
         updateCardShirtBadgeInPlace(dd);
         renderCardComposite(d.id);
       });
@@ -1737,7 +1744,7 @@ async function cycleShirt(id){
   const order = [null, 'black', 'white'];
   d.shirtOverride = order[(order.indexOf(d.shirtOverride||null) + 1) % order.length];
   invalidateCache(id);
-  await persistDesign(d);
+  persistSoon(d);
   updateCardShirtBadgeInPlace(d);
   renderCardComposite(id);
   if(state.activeId === id){ updateDetailHeader(); renderDetailCanvas(); syncDetailControls(); }
@@ -1748,7 +1755,7 @@ async function setStatus(id, status){
   if(!d) return;
   const prev = d.status || 'inbox';
   d.status = (d.status === status) ? 'inbox' : status;
-  await persistDesign(d);
+  persistSoon(d);
   state.lastAction = {id, prev, next: d.status};
   // Update filter counts
   renderFilters();
@@ -1783,7 +1790,7 @@ $('toastUndo').onclick = async () => {
   const d = state.designs.find(x => x.id === state.lastAction.id);
   if(d){
     d.status = state.lastAction.prev;
-    await persistDesign(d);
+    persistSoon(d);
     renderFilters();
     const existingCard = document.querySelector(`.card[data-id="${d.id}"]`);
     const showsInCurrentFilter = state.filter === 'all'
@@ -1874,7 +1881,7 @@ document.querySelectorAll('#cardShirtSeg button').forEach(b => {
     if(!d) return;
     d.shirtOverride = (d.shirtOverride === b.dataset.v) ? null : b.dataset.v;
     invalidateCache(d.id);
-    await persistDesign(d);
+    persistSoon(d);
     document.querySelectorAll('#cardShirtSeg button').forEach(x => x.classList.toggle('on', x.dataset.v === d.shirtOverride));
     updateCardShirtBadgeInPlace(d);
     refreshCardActionsSub();
@@ -1901,7 +1908,7 @@ $('resetSize').onclick = async () => {
   if(!d) return;
   d.sizeOverride = null;
   invalidateCache(d.id);
-  await persistDesign(d);
+  persistSoon(d);
   document.querySelectorAll('#cardSizeSeg button').forEach(x => x.classList.remove('on'));
   updateCardShirtBadgeInPlace(d);
   renderCardComposite(d.id);
@@ -1913,7 +1920,7 @@ $('resetShirt').onclick = async () => {
   if(!d) return;
   d.shirtOverride = null;
   invalidateCache(d.id);
-  await persistDesign(d);
+  persistSoon(d);
   document.querySelectorAll('#cardShirtSeg button').forEach(x => x.classList.remove('on'));
   updateCardShirtBadgeInPlace(d);
   renderCardComposite(d.id);
@@ -1944,7 +1951,7 @@ document.querySelectorAll('#cardSideSeg button').forEach(b => {
     if(!d) return;
     d.side = b.dataset.v;
     invalidateCache(d.id);
-    await persistDesign(d);
+    persistSoon(d);
     document.querySelectorAll('#cardSideSeg button').forEach(x => x.classList.toggle('on', x.dataset.v === d.side));
     updateCardShirtBadgeInPlace(d);
     refreshCardActionsSub();
@@ -1979,7 +1986,7 @@ $('cardKnockoutSlider').addEventListener('input', e => {
   updateCardShirtBadgeInPlace(d);
   clearTimeout(_cardKnockoutTimer);
   _cardKnockoutTimer = setTimeout(async () => {
-    await persistDesign(d);
+    persistSoon(d);
     renderCardComposite(d.id);
     refreshViewerIfShowing(d.id);
   }, 180);
@@ -1991,7 +1998,7 @@ $('resetKnockout').onclick = async () => {
   $('cardKnockoutSlider').value = state.settings.knockout;
   $('cardKnockoutVal').textContent = state.settings.knockout + '%';
   invalidateCache(d.id);
-  await persistDesign(d);
+  persistSoon(d);
   updateCardShirtBadgeInPlace(d);
   renderCardComposite(d.id);
   refreshViewerIfShowing(d.id);
@@ -2069,7 +2076,7 @@ async function renderDetailCanvas(){
 
 $('closeDetail').onclick = async () => {
   const d = state.designs.find(x => x.id === state.activeId);
-  if(d){ d.notes = $('notesArea').value; await persistDesign(d); }
+  if(d){ d.notes = $('notesArea').value; persistSoon(d); }
   $('detail').classList.remove('open');
   state.activeId = null;
   // Refresh grid card in case overrides or status changed (v14.64: status too)
@@ -2107,7 +2114,7 @@ document.querySelectorAll('#dShirtSeg button').forEach(b => {
     if(!d) return;
     d.shirtOverride = (d.shirtOverride === b.dataset.v) ? null : b.dataset.v;
     invalidateCache(d.id);
-    await persistDesign(d);
+    persistSoon(d);
     document.querySelectorAll('#dShirtSeg button').forEach(x => x.classList.toggle('on', x.dataset.v === d.shirtOverride));
     renderDetailCanvas();
   };
@@ -2119,7 +2126,7 @@ document.querySelectorAll('#dSideSeg button').forEach(b => {
     if(!d) return;
     d.side = b.dataset.v;
     invalidateCache(d.id);
-    await persistDesign(d);
+    persistSoon(d);
     document.querySelectorAll('#dSideSeg button').forEach(x => x.classList.toggle('on', x.dataset.v === d.side));
     updateDetailHeader();
     renderDetailCanvas();
@@ -2130,7 +2137,7 @@ $('dResetSize').onclick = async () => {
   if(!d) return;
   d.sizeOverride = null;
   invalidateCache(d.id);
-  await persistDesign(d);
+  persistSoon(d);
   document.querySelectorAll('#dSizeSeg button').forEach(x => x.classList.remove('on'));
   renderDetailCanvas();
 };
@@ -2139,7 +2146,7 @@ $('dResetShirt').onclick = async () => {
   if(!d) return;
   d.shirtOverride = null;
   invalidateCache(d.id);
-  await persistDesign(d);
+  persistSoon(d);
   document.querySelectorAll('#dShirtSeg button').forEach(x => x.classList.remove('on'));
   renderDetailCanvas();
 };
@@ -2157,14 +2164,14 @@ $('dvOffset').addEventListener('change', async e => {
   const d = state.designs.find(x => x.id === state.activeId);
   if(!d) return;
   d.vOffsetOverride = +e.target.value;
-  await persistDesign(d);
+  persistSoon(d);
 });
 $('dResetPos').onclick = async () => {
   const d = state.designs.find(x => x.id === state.activeId);
   if(!d) return;
   d.vOffsetOverride = 0;
   invalidateCache(d.id);
-  await persistDesign(d);
+  persistSoon(d);
   $('dvOffset').value = 0;
   renderDetailCanvas();
 };
@@ -2202,13 +2209,13 @@ notesArea.addEventListener('focus', () => {
 notesArea.addEventListener('blur', async () => {
   notesRow.classList.remove('editing');
   const d = state.designs.find(x => x.id === state.activeId);
-  if(d){ d.notes = notesArea.value; await persistDesign(d); }
+  if(d){ d.notes = notesArea.value; persistSoon(d); }
 });
 notesArea.addEventListener('input', () => {
   clearTimeout(notesSaveTimer);
   notesSaveTimer = setTimeout(async () => {
     const d = state.designs.find(x => x.id === state.activeId);
-    if(d){ d.notes = notesArea.value; await persistDesign(d); }
+    if(d){ d.notes = notesArea.value; persistSoon(d); }
   }, 500);
 });
 $('notesDone').onclick = () => notesArea.blur();
@@ -2550,7 +2557,7 @@ async function openCompareOverlay(){
       const d = state.designs.find(x => x.id === id);
       if(!d) return;
       d.status = (d.status === 'round1') ? 'inbox' : 'round1';
-      await persistDesign(d);
+      persistSoon(d);
       const picked = d.status === 'round1';
       btn.classList.toggle('picked', picked);
       btn.querySelector('span').textContent = picked ? 'Kept' : 'Pick';
@@ -3152,7 +3159,7 @@ async function aiChunkContent(chunkIds, width){
   for(const id of chunkIds){
     const d = state.designs.find(x => x.id === id);
     if(!d || !d.blob) continue;
-    let url; try { url = await composite(d, state.settings, width); } catch(e){ continue; }
+    let url; try { url = await _withTimeout(composite(d, state.settings, width), 15000); } catch(e){ continue; }
     const parts = _dataUrlParts(url); if(!parts) continue;
     used.push(id);
     content.push({type:'text', text:'Design ' + used.length + ':'});
@@ -3207,11 +3214,17 @@ async function aiCallNow(content){
   const model = aiGetModel();
   const body = aiRequestParams(content);
   const tryFallback = model !== 'claude-haiku-5-5';   // Haiku has no server-side fallback
-  const send = (withFb) => fetch('https://api.anthropic.com/v1/messages', {
-    method:'POST',
-    headers: Object.assign(aiHeaders(), withFb ? {'anthropic-beta':'server-side-fallback-2026-07-01'} : {}),
-    body: JSON.stringify(withFb ? Object.assign({}, body, {fallbacks:'default'}) : body)
-  });
+  // v14.65: a request that never answers is cut off after 3 minutes and retried, instead
+  // of freezing the whole run (and Rank) forever.
+  const send = (withFb) => {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), 180000);
+    return fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST', signal: ac.signal,
+      headers: Object.assign(aiHeaders(), withFb ? {'anthropic-beta':'server-side-fallback-2026-07-01'} : {}),
+      body: JSON.stringify(withFb ? Object.assign({}, body, {fallbacks:'default'}) : body)
+    }).finally(() => clearTimeout(timer));
+  };
   let res;
   if(tryFallback){
     try {
@@ -3242,6 +3255,9 @@ function aiRunResults(q){
     const d = state.designs.find(x => x.id === id);
     if(d && d.aiScore != null && (d.aiRankedAt || 0) >= q.at) out.push({id, score: d.aiScore, reason: d.aiReason || '', round: d.aiRound || 1});
   });
+  // Ordered by score (every score uses the same fixed 0-10 scale). Ordering "furthest
+  // round first" was tried and measured worse: a strong design knocked out by a tough
+  // group got buried under weaker finalists (6/10 of the true top 10 vs 9/10).
   return out.sort((a, b) => b.score - a.score);
 }
 // v14.56: a tournament, so the designs at the top have actually been compared against
@@ -3318,6 +3334,7 @@ function aiPickChamps(excludeIds){
 }
 function aiQueueEdit(fn){ const q = aiQueueGet(); if(!q) return null; aiQueueNorm(q); fn(q); aiQueueSet(q); return q; }
 async function aiProcessQueue(onProgress){
+  if(!state.designs.length) throw new Error('Your designs haven\u2019t loaded \u2014 reopen TeeSort, then Continue');
   let last = aiQueueEdit(q => { q.paused = false; });
   if(!last) return {results: [], failed: 0};
   aiSpendStartRun(last.at);
@@ -3375,7 +3392,7 @@ async function aiProcessQueue(onProgress){
       } catch(e){
         if(e && e.hard){ run.stop = true; run.err = e; }
         else {
-          const network = e instanceof TypeError;          // Safari: "Load failed"
+          const network = e instanceof TypeError || (e && e.name === 'AbortError');   // Safari "Load failed", or our 3-minute cut-off
           const justBack = document.visibilityState !== 'visible' || Date.now() - aiLastVisibleAt < 4000;
           if(network || (e && e.busy)){
             if(!(network && justBack)) run.busy++;
@@ -3388,7 +3405,8 @@ async function aiProcessQueue(onProgress){
             }
           } else {
             const k = chunk[0]; tries[k] = (tries[k] || 0) + 1;
-            if(tries[k] >= 2) finish([], chunk);
+            // In round 2+ these are contenders: let them move on rather than vanish.
+            if(tries[k] >= 2) finish([], chunk, round > 1 ? chunk : []);
           }
         }
       } finally {
@@ -3439,7 +3457,7 @@ function aiResume(){
 async function aiStart(){
   if(aiRun && !aiRun.stop) return;
   if(aiRun){
-    const t = document.getElementById('foTitle'); if(t) t.textContent = 'Claude is looking…';
+    const t = document.getElementById('foTitle'); if(t) t.textContent = 'Finishing the last group…';
     try { await aiRun.done; } catch(e){}
     while(aiRun) await aiSleep(200);
   }
@@ -3479,6 +3497,7 @@ function rankEntry(){
     aiQueueNorm(q);
     const inAll = new Set(q.all);
     ids.forEach(id => { if(!inAll.has(id)){ q.all.push(id); q.pool.push(id); q.left.push(id); } });
+    if(q.isFinal && q.pool.length > 30) q.isFinal = false;    // too many for one final group
   }
   q.paused = false;
   aiQueueSet(q);
@@ -3523,7 +3542,13 @@ function aiShowPaused(msg){
     + '</div>';
   document.getElementById('aiGo').onclick = () => aiStart();
   const end = document.getElementById('aiEnd');
-  if(end) end.onclick = () => { const r = aiRunResults(q); aiQueueSet(null); aiQueueStatusRender(); foRenderRanked(r); };
+  if(end) end.onclick = () => {
+    const r = aiRunResults(q); const cs = new Set(q.champs || []);
+    const own = r.filter(x => !cs.has(x.id));
+    aiRunSave(q.at, own.length, own.map(x => x.id));
+    aiQueueSet(null); aiQueueStatusRender();
+    foRenderRanked(r, {champs: (q.champs || []).length, champIds: q.champs || [], rounds: q.round || 1});
+  };
 }
 async function aiRunUI(){
   if(aiRun) return;
@@ -3542,7 +3567,17 @@ async function aiRunUI(){
       const c = document.getElementById('aiCount'); if(c) c.textContent = aiRoundLabel(p);
       const bar = document.getElementById('aiBar'); if(bar) bar.style.width = Math.round(Math.min(1, p.frac) * 100) + '%';
     });
-    if(r.stopped || !faceoff) return;
+    if(r.stopped) return;
+    if(!faceoff){
+      // You left while the last group was being judged: it still finished, so keep it.
+      if(r.results && r.results.length){
+        const cs = new Set(r.champIds || []);
+        const own = r.results.filter(x => !cs.has(x.id));
+        aiRunSave(r.at, own.length, own.map(x => x.id));
+        showToast('Ranking finished \u2014 sort by Claude\u2019s score to see it');
+      }
+      return;
+    }
     if(!r.results.length) throw new Error('Claude couldn’t score these');
     if(r.failed) showToast(r.failed + ' couldn’t be scored — rank them again');
     {
@@ -3634,7 +3669,7 @@ async function foRenderRanked(results, opts){
       const d = state.designs.find(x => x.id === btn.dataset.star); if(!d) return;
       d.finalist = !d.finalist;
       if(d.finalist && d.status !== 'round1') d.status = 'round1';
-      await persistDesign(d);
+      persistSoon(d);
       btn.classList.toggle('on', d.finalist);
       if(navigator.vibrate) navigator.vibrate(6);
     });
@@ -3970,9 +4005,15 @@ let vTapTimer = null, vLongPressed = false;
 
 const vTrack = $('viewerTrack');
 
+// v14.65: after a pinch, the finger left on the glass must not count as a swipe - it used
+// to be measured from where the pinch began, so lifting fingers jumped to another
+// design or closed the viewer.
+let vAfterPinch = false;
+function vSnapSlide(){ const sl = $('vSlide'); if(sl){ sl.style.transition = 'transform .2s'; sl.style.transform = 'translateX(0)'; } }
 vTrack.addEventListener('touchstart', e => {
   if(e.touches.length === 2){
-    vPinching = true;
+    vPinching = true; vAfterPinch = true;
+    vSwipeAxis = null; vDragging = false; vSnapSlide();
     vPinchStartDist = Math.hypot(
       e.touches[0].clientX - e.touches[1].clientX,
       e.touches[0].clientY - e.touches[1].clientY
@@ -4026,6 +4067,7 @@ vTrack.addEventListener('touchmove', e => {
     clearTimeout(vTapTimer);
     return;
   }
+  if(vAfterPinch) return;                  // leftover pinch finger: pan only (above), never swipe
   const dx = e.touches[0].clientX - vSwipeStartX;
   const dy = e.touches[0].clientY - vSwipeStartY;
   if(!vSwipeAxis && (Math.abs(dx) > 8 || Math.abs(dy) > 8)){
@@ -4046,6 +4088,15 @@ vTrack.addEventListener('touchend', e => {
   clearTimeout(vTapTimer);
   if(vPinching){
     if(e.touches.length < 2) vPinching = false;
+    if(e.touches.length === 1){
+      // one finger still down: re-measure from here so it can pan, but never swipe
+      vSwipeStartX = e.touches[0].clientX; vSwipeStartY = e.touches[0].clientY;
+      viewerState._panStartX = viewerState.panX || 0; viewerState._panStartY = viewerState.panY || 0;
+    }
+    return;
+  }
+  if(vAfterPinch){
+    if(e.touches.length === 0){ vAfterPinch = false; vSwipeAxis = null; vSnapSlide(); setTimeout(() => { vDragging = false; }, 50); }
     return;
   }
   const slide = $('vSlide');
@@ -4067,7 +4118,8 @@ vTrack.addEventListener('touchend', e => {
 
 vTrack.addEventListener('touchcancel', () => {
   clearTimeout(vTapTimer);
-  vPinching = false;
+  vPinching = false; vAfterPinch = false; vSwipeAxis = null; vDragging = false;
+  vSnapSlide();
 });
 
 // Tap = toggle preview / original
@@ -4260,7 +4312,7 @@ window.addEventListener('pageshow', e => {
   });
   aiQueueStatusRender();
   const q = aiQueueGet();
-  if(q && !q.paused && aiGetKey()) aiResume();
+  if(q && !q.paused && aiGetKey() && state.designs.length) aiResume();
 })();
 
 
@@ -4304,20 +4356,43 @@ function _buildManifest(items){
   }
   return rows.join('\n');
 }
-async function _saveBlob(blob, filename){
-  const file = new File([blob], filename, {type:'application/zip'});
-  try {
-    if(navigator.canShare && navigator.canShare({files:[file]})){
-      await navigator.share({files:[file], title: filename});
-      return true;
-    }
-  } catch(e){ if(e.name === 'AbortError') return false; }
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url; a.download = filename;
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-  return true;
+// v14.65: building a ZIP takes a while, and iPhone only opens the share sheet straight
+// from a tap - so the old automatic share was refused, the download fallback does nothing
+// in the home-screen app, and it still said "Exported". Now each finished ZIP waits for
+// you to tap Save, which opens the share sheet right away ("Save to Files").
+function _saveBlob(blob, filename){
+  return new Promise(resolve => {
+    const file = new File([blob], filename, {type:'application/zip'});
+    const old = document.getElementById('zipSavePanel'); if(old) old.remove();
+    const panel = document.createElement('div');
+    panel.id = 'zipSavePanel';
+    panel.style.cssText = 'position:fixed;left:12px;right:12px;bottom:calc(16px + env(safe-area-inset-bottom));z-index:97;background:#1c1c20;border:1px solid #3a3a40;border-radius:16px;padding:14px;box-shadow:0 10px 30px rgba(0,0,0,.5)';
+    const mb = (blob.size / (1024*1024)).toFixed(1);
+    panel.innerHTML = '<div style="color:#fff;font-size:14px;font-weight:700;margin-bottom:2px;word-break:break-all">' + filename.replace(/[<>]/g,'') + '</div>'
+      + '<div style="color:rgba(255,255,255,.55);font-size:12px;margin-bottom:10px">' + mb + ' MB · ready</div>'
+      + '<button id="zipSaveNow" style="width:100%;height:46px;border:0;border-radius:12px;background:#fff;color:#000;font-size:15px;font-weight:700;font-family:inherit;-webkit-appearance:none">Save ZIP</button>'
+      + '<button id="zipSaveStop" style="width:100%;height:40px;margin-top:8px;border:0;border-radius:12px;background:transparent;color:rgba(255,255,255,.7);font-size:14px;font-family:inherit;-webkit-appearance:none">Cancel</button>';
+    document.body.appendChild(panel);
+    const done = ok => { panel.remove(); resolve(ok); };
+    document.getElementById('zipSaveStop').onclick = () => done(false);
+    document.getElementById('zipSaveNow').onclick = () => {
+      let canShare = false;
+      try { canShare = !!(navigator.canShare && navigator.canShare({files:[file]})); } catch(e){}
+      if(canShare){
+        navigator.share({files:[file], title: filename}).then(() => done(true)).catch(e => {
+          if(e && e.name === 'AbortError') return;          // closed the share sheet: panel stays, tap again
+          showToast('Couldn’t open the share sheet — tap Save again');
+        });
+      } else {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = filename;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 60000);   // revoking at once could kill the download
+        done(true);
+      }
+    };
+  });
 }
 const ZIP_TARGET_BYTES = 180 * 1024 * 1024; // ~180MB per ZIP
 
@@ -4475,8 +4550,10 @@ async function showFinalistAudit(){
     let dims = '';
     if(hasBlob){
       try {
-        const bm = await blobToBitmap(d.blob, 100);
-        dims = `${bm.width || '?'}\u00d7${bm.height || '?'}`;
+        // v14.65: blobToBitmap now shrinks images, so read the real size from the file
+        const url = URL.createObjectURL(d.blob);
+        try { const im = await loadImage(url, 15000); dims = `${im.naturalWidth || '?'}\u00d7${im.naturalHeight || '?'}`; }
+        finally { URL.revokeObjectURL(url); }
       } catch(e){}
     }
     rows.push({name: d.name || d.id, size, dims, type: hasBlob ? (d.blob.type || '?') : 'MISSING'});
