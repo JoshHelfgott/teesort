@@ -1266,7 +1266,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.61 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.62 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -4066,40 +4066,46 @@ async function _shareViewerItem(kind){
       mime = blob.type || 'image/png';
     }
   } catch(e){ console.error('prep err', e); showToast('Prep failed'); return; }
-  // Try Web Share (with files) first - works in Safari but often fails in PWA
-  const file = new File([blob], filename, {type: mime});
-  let shareWorked = false;
-  try {
-    if(navigator.canShare && navigator.canShare({files:[file]})){
-      await navigator.share({files:[file]});
-      shareWorked = true;
-    }
-  } catch(e){ if(e.name === 'AbortError') return; console.warn('share failed, fallback', e); }
-  if(!shareWorked){
-    // Fallback: open blob URL in new tab. On iPhone Safari the user long-presses to Save Image.
-    const url = URL.createObjectURL(blob);
-    const w = window.open(url, '_blank');
-    if(!w){
-      // Popup blocked (typical in PWA): show inline preview with save instruction
-      showFallbackImagePreview(url, filename);
-    } else {
-      showToast('Opened image. Long-press to Save.');
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
-    }
+  // v14.62: iPhone only opens its share sheet straight from a tap, and the old code first
+  // spent time preparing the file (or drawing the mockup), so iPhone refused and the
+  // fallback popup was blocked in the home-screen app - nothing happened. Now the picture
+  // opens here with a Save button; tapping it opens the share sheet right away
+  // ("Save Image" puts it in Photos). Long-pressing the picture works too.
+  if(!/^image\/(jpeg|png|webp|gif)$/.test(mime)){
+    try {                                    // e.g. HEIC: hand iPhone a plain JPEG
+      const bm = await blobToBitmap(blob, 6000);
+      const c = document.createElement('canvas'); c.width = bm.width; c.height = bm.height;
+      c.getContext('2d').drawImage(bm, 0, 0); if(bm.close) bm.close();
+      blob = await new Promise(r => c.toBlob(r, 'image/jpeg', 0.95));
+      mime = 'image/jpeg'; filename = filename.replace(/\.[^.]+$/, '') + '.jpg';
+    } catch(e){}
   }
+  const file = new File([blob], filename, {type: mime});
+  showSavePreview(URL.createObjectURL(blob), file);
 }
 
-function showFallbackImagePreview(url, filename){
-  let m = document.getElementById('imgFallback');
-  if(!m){
-    m = document.createElement('div');
-    m.id = 'imgFallback';
-    m.style.cssText = 'position:fixed;inset:0;z-index:80;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px';
-    document.body.appendChild(m);
-  }
-  m.innerHTML = `<div style="color:#fff;text-align:center;margin-bottom:12px;font-size:13px">Long-press the image below to Save to Photos or Copy.<br><span style="color:rgba(255,255,255,.5);font-size:11px">${filename}</span></div>
-    <img src="${url}" style="max-width:100%;max-height:60vh;object-fit:contain;border-radius:8px;-webkit-touch-callout:default;-webkit-user-select:auto;user-select:auto">
-    <button style="margin-top:16px;padding:12px 24px;border-radius:12px;background:rgba(255,255,255,.15);color:#fff;font-weight:600;border:0" onclick="document.getElementById('imgFallback').remove()">Done</button>`;
+function showSavePreview(url, file){
+  const old = document.getElementById('imgFallback'); if(old) old.remove();
+  const m = document.createElement('div');
+  m.id = 'imgFallback';
+  m.style.cssText = 'position:fixed;inset:0;z-index:90;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px 16px calc(20px + env(safe-area-inset-bottom))';
+  const canShare = !!(navigator.share && navigator.canShare && (() => { try { return navigator.canShare({files:[file]}); } catch(e){ return false; } })());
+  m.innerHTML = '<img src="' + url + '" alt="" style="max-width:100%;max-height:62vh;object-fit:contain;border-radius:8px;-webkit-touch-callout:default;-webkit-user-select:auto;user-select:auto">'
+    + '<div style="color:rgba(255,255,255,.55);font-size:12px;margin:12px 0 14px;text-align:center">'
+    + (canShare ? 'Or long-press the picture → Save to Photos' : 'Long-press the picture → Save to Photos') + '</div>'
+    + (canShare ? '<button id="saveNow" style="width:100%;max-width:340px;height:50px;border-radius:14px;border:0;background:#fff;color:#000;font-size:16px;font-weight:700;font-family:inherit;-webkit-appearance:none">Save to Photos</button>' : '')
+    + '<button id="saveDone" style="width:100%;max-width:340px;height:46px;margin-top:10px;border-radius:14px;border:0;background:#2c2c31;color:#fff;font-size:15px;font-weight:600;font-family:inherit;-webkit-appearance:none">Done</button>';
+  document.body.appendChild(m);
+  const done = () => { m.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); };
+  document.getElementById('saveDone').onclick = done;
+  const sv = document.getElementById('saveNow');
+  if(sv) sv.onclick = () => {
+    // Called directly from the tap - no waiting first - so iPhone allows it.
+    navigator.share({files:[file]}).then(done).catch(e => {
+      if(e && e.name === 'AbortError') return;
+      showToast('Long-press the picture to save it');
+    });
+  };
 }
 // v14.51: same rule as the grid pill - the size only changes once the new picture is
 // drawn, and drawing goes through loadCurrent() so an older, slower redraw can never land
@@ -4558,15 +4564,12 @@ const _el7=document.getElementById('clearShirtOverrides'); if(_el7) _el7.onclick
   renderGrid();
 };
 
-// v14.4 share sheet buttons
-const _el8=document.getElementById('shareOriginal'); if(_el8) _el8.onclick = async () => {
+// v14.62: the sheet's markup comes after this script, so the old getElementById wiring
+// found nothing and these two buttons never did anything. Wired inline in the markup now.
+async function _shareFromSheet(kind){
   _closeShareSheet();
-  await _shareViewerItem('original');
-};
-const _el9=document.getElementById('shareTee'); if(_el9) _el9.onclick = async () => {
-  _closeShareSheet();
-  await _shareViewerItem('tee');
-};
+  await _shareViewerItem(kind);
+}
 
 // v14 finalist migration
 if(state.designs){ state.designs.forEach(d => { if(d.finalist === undefined) d.finalist = false; }); }
@@ -4579,8 +4582,8 @@ if(state.designs){ state.designs.forEach(d => { if(d.finalist === undefined) d.f
   <div style="padding:8px 20px 20px">
     <h2 style="font-size:18px;font-weight:700;margin:8px 0 6px">Save</h2>
     <div style="font-size:12px;color:rgba(255,255,255,.5);margin-bottom:14px">Save to Photos or send anywhere.</div>
-    <button class="ghost" id="shareOriginal" style="margin-top:0">Save original graphic</button>
-    <button class="ghost" id="shareTee">Save tee mockup preview</button>
+    <button class="ghost" id="shareOriginal" style="margin-top:0" onclick="_shareFromSheet('original')">Save original graphic</button>
+    <button class="ghost" id="shareTee" onclick="_shareFromSheet('tee')">Save tee mockup preview</button>
     <button class="ghost" onclick="_closeShareSheet()" style="margin-top:8px;background:transparent">Cancel</button>
   </div>
 </div>
