@@ -229,7 +229,7 @@
   .empty .primary-btn{margin-top:18px;height:44px;padding:0 18px;font-size:14px}
   .empty-hint{font-size:11px;color:rgba(255,255,255,.4);margin-top:12px;max-width:300px;line-height:1.45}
 
-  .toast{position:fixed;left:50%;bottom:max(20px,env(safe-area-inset-bottom));transform:translateX(-50%) translateY(80px);background:#fff;color:#000;border-radius:999px;padding:10px 14px;font-size:13px;font-weight:500;box-shadow:0 10px 30px rgba(0,0,0,.35);display:flex;align-items:center;gap:8px;z-index:50;opacity:0;transition:transform .25s ease,opacity .25s ease;pointer-events:none}
+  .toast{position:fixed;left:50%;bottom:max(20px,env(safe-area-inset-bottom));transform:translateX(-50%) translateY(80px);background:#fff;color:#000;border-radius:999px;padding:10px 14px;font-size:13px;font-weight:500;box-shadow:0 10px 30px rgba(0,0,0,.35);display:flex;align-items:center;gap:8px;z-index:95;opacity:0;transition:transform .25s ease,opacity .25s ease;pointer-events:none}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0);pointer-events:auto}
   .toast button{font-weight:600;color:#0070f3;padding:2px 8px;margin-left:4px;border-radius:6px}
   .toast .pulse{width:6px;height:6px;border-radius:50%;background:#000;animation:pulse 1s infinite}
@@ -239,6 +239,8 @@
   .sheet-bg.open{opacity:1;pointer-events:auto}
   .sheet{position:fixed;left:0;right:0;bottom:0;max-width:520px;margin:0 auto;background:#141417;border-radius:22px 22px 0 0;z-index:41;transform:translateY(100%);transition:transform .28s cubic-bezier(.32,.72,0,1);max-height:88vh;overflow-y:auto;padding-bottom:env(safe-area-inset-bottom)}
   .sheet.open{transform:translateY(0)}
+  /* v14.64: opened from the full-screen viewer too, so they must sit above it (48) */
+  #cardActionsBg{z-index:52} #cardActionsSheet{z-index:53}
   .sheet-handle{width:36px;height:4px;border-radius:2px;background:rgba(255,255,255,.18);margin:8px auto 4px}
   .sheet-head{display:flex;align-items:center;justify-content:space-between;padding:8px 18px 4px}
   .sheet-title{font-size:17px;font-weight:600;letter-spacing:-.01em}
@@ -265,7 +267,7 @@
   .ghost.danger{background:rgba(239,68,68,.1);color:#fca5a5}
 
   /* Detail view */
-  .detail{position:fixed;left:0;right:0;top:0;bottom:0;background:#0a0a0b;z-index:42;display:none;flex-direction:column;max-width:520px;margin:0 auto;height:100dvh;height:var(--vh,100dvh)}
+  .detail{position:fixed;left:0;right:0;top:0;bottom:0;background:#0a0a0b;z-index:55;display:none;flex-direction:column;max-width:520px;margin:0 auto;height:100dvh;height:var(--vh,100dvh)}
   .detail.open{display:flex}
   .detail-head{padding:env(safe-area-inset-top) 12px 6px;display:flex;align-items:center;justify-content:space-between;gap:8px;flex:0 0 auto}
   .detail-head .icon-btn{width:36px;height:36px}
@@ -1266,7 +1268,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.63 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.64 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -1903,6 +1905,8 @@ $('resetSize').onclick = async () => {
   document.querySelectorAll('#cardSizeSeg button').forEach(x => x.classList.remove('on'));
   updateCardShirtBadgeInPlace(d);
   renderCardComposite(d.id);
+  refreshCardActionsSub();
+  refreshViewerIfShowing(d.id);
 };
 $('resetShirt').onclick = async () => {
   const d = state.designs.find(x => x.id === state.actionsId);
@@ -1913,6 +1917,8 @@ $('resetShirt').onclick = async () => {
   document.querySelectorAll('#cardShirtSeg button').forEach(x => x.classList.remove('on'));
   updateCardShirtBadgeInPlace(d);
   renderCardComposite(d.id);
+  refreshCardActionsSub();
+  refreshViewerIfShowing(d.id);
 };
 function refreshCardActionsSub(){
   const d = state.designs.find(x => x.id === state.actionsId);
@@ -2035,13 +2041,17 @@ async function openDetail(id, focusNotes=false){
   if(focusNotes) setTimeout(() => $('notesArea').focus(), 320);
 }
 
+let _detailTok = 0;
 async function renderDetailCanvas(){
   const d = state.designs.find(x => x.id === state.activeId);
   if(!d || !d.blob) return;
+  const tok = ++_detailTok;
+  const stale = () => tok !== _detailTok || state.activeId !== d.id;
   const canvas = $('detailCanvas');
   const ctx = canvas.getContext('2d');
   if(state.settings.view === 'original'){
     const bm = await blobToBitmap(d.blob, 1400);
+    if(stale()){ if(bm.close) bm.close(); return; }
     canvas.width = bm.width; canvas.height = bm.height;
     ctx.clearRect(0,0,canvas.width,canvas.height);
     ctx.drawImage(bm, 0, 0);
@@ -2049,6 +2059,7 @@ async function renderDetailCanvas(){
   } else {
     const url = await composite(d, state.settings, 1100);
     const img = await loadImage(url);
+    if(stale()) return;
     canvas.width = img.width; canvas.height = img.height;
     ctx.clearRect(0,0,canvas.width,canvas.height);
     ctx.drawImage(img, 0, 0);
@@ -2061,8 +2072,13 @@ $('closeDetail').onclick = async () => {
   if(d){ d.notes = $('notesArea').value; await persistDesign(d); }
   $('detail').classList.remove('open');
   state.activeId = null;
-  // Refresh grid card in case overrides changed
-  if(d){ updateCardShirtBadgeInPlace(d); renderCardComposite(d.id); }
+  // Refresh grid card in case overrides or status changed (v14.64: status too)
+  if(d){
+    if(!belongsInCurrentView(d)) renderGrid();
+    else { updateCardStatusInPlace(d); updateCardShirtBadgeInPlace(d); renderCardComposite(d.id); }
+    renderFilters();
+    refreshViewerIfShowing(d.id);
+  }
 };
 
 $('detailShirtBtn').onclick = () => { if(state.activeId) cycleShirt(state.activeId); };
@@ -2159,8 +2175,9 @@ document.querySelectorAll('#segStatus button').forEach(b => {
     if(!d) return;
     const newStatus = (d.status === b.dataset.s) ? 'inbox' : b.dataset.s;
     d.status = newStatus;
-    await persistDesign(d);
+    persistSoon(d);
     document.querySelectorAll('#segStatus button').forEach(x => x.classList.toggle('on', x.dataset.s === newStatus));
+    renderFilters();
   };
 });
 
@@ -2333,57 +2350,60 @@ async function exportDesigns(designs, forceAll){
     return;
   }
   closeSettings();
-  // Try Web Share API with files
-  const files = [];
+  // v14.64: keep each file paired with its design, so "exported" marks land on the right
+  // ones even when a design has no image. iPhone only opens the share sheet straight
+  // from a tap, so after the first batch of 10 each further batch gets its own button
+  // (before, everything after the first 10 failed silently).
+  const items = [];
   for(const d of toExport){
     if(!d.blob) continue;
-    const name = (d.name || 'design').replace(/\.(jpg|jpeg|png|webp|heic)$/i, '') + '.' + (d.blob.type.split('/')[1] || 'png');
-    files.push(new File([d.blob], name, {type: d.blob.type || 'image/png'}));
+    const name = (d.name || 'design').replace(/\.(jpg|jpeg|png|webp|heic)$/i, '') + '.' + ((d.blob.type || 'image/png').split('/')[1] || 'png');
+    items.push({d, file: new File([d.blob], name, {type: d.blob.type || 'image/png'})});
   }
-  if(!files.length){ showToast('No exportable files'); return; }
-  // iOS Web Share has a limit on number of files - share in batches of 10
+  if(!items.length){ showToast('No exportable files'); return; }
   const BATCH = 10;
-  let exported = 0;
-  for(let i = 0; i < files.length; i += BATCH){
-    const chunk = files.slice(i, i + BATCH);
+  const total = items.length;
+  let next = 0, exported = 0;
+  const panel = document.createElement('div');
+  panel.id = 'exportPanel';
+  panel.style.cssText = 'position:fixed;left:12px;right:12px;bottom:calc(16px + env(safe-area-inset-bottom));z-index:96;background:#1c1c20;border:1px solid #3a3a40;border-radius:16px;padding:14px;display:none;box-shadow:0 10px 30px rgba(0,0,0,.5)';
+  const old = document.getElementById('exportPanel'); if(old) old.remove();
+  document.body.appendChild(panel);
+  const finish = (msg) => { panel.remove(); showToast(msg || `Exported ${exported} design${exported===1?'':'s'}`); renderGrid(); };
+  const markDone = (chunk) => { chunk.forEach(it => { it.d.exportedAt = Date.now(); persistSoon(it.d); }); exported += chunk.length; };
+  const shareNext = async () => {
+    const chunk = items.slice(next, next + BATCH);
+    if(!chunk.length){ finish(); return; }
+    const files = chunk.map(it => it.file);
     try {
-      if(navigator.canShare && navigator.canShare({files: chunk})){
-        await navigator.share({
-          files: chunk,
-          title: 'TeeSort export',
-          text: `${chunk.length} design${chunk.length===1?'':'s'}`
-        });
-        // Mark these as exported
-        for(let j = 0; j < chunk.length; j++){
-          const d = toExport[i + j];
-          if(d){ d.exportedAt = Date.now(); persistSoon(d); }
-        }
-        exported += chunk.length;
+      if(navigator.canShare && navigator.canShare({files})){
+        await navigator.share({files, title: 'TeeSort export', text: `${files.length} design${files.length===1?'':'s'}`});
       } else {
-        // Fallback: trigger download per file
-        for(let j = 0; j < chunk.length; j++){
-          const file = chunk[j];
+        for(const file of files){
           const url = URL.createObjectURL(file);
           const a = document.createElement('a');
           a.href = url; a.download = file.name;
           document.body.appendChild(a); a.click(); document.body.removeChild(a);
-          URL.revokeObjectURL(url);
-          const d = toExport[i + j];
-          if(d){ d.exportedAt = Date.now(); await persistDesign(d); }
-          exported++;
+          setTimeout(() => URL.revokeObjectURL(url), 4000);
         }
       }
+      markDone(chunk);
+      next += chunk.length;
     } catch(err){
-      if(err.name === 'AbortError'){
-        showToast(`Export canceled. ${exported} exported so far.`);
-        renderGrid();
-        return;
-      }
+      if(err && err.name === 'AbortError'){ finish(`Export stopped — ${exported} of ${total} exported`); return; }
       console.error('export err', err);
     }
-  }
-  showToast(`Exported ${exported} design${exported===1?'':'s'}`);
-  renderGrid();
+    if(next >= total){ finish(); return; }
+    const end = Math.min(total, next + BATCH);
+    panel.innerHTML = '<div style="color:#fff;font-size:14px;font-weight:700;margin-bottom:4px">' + exported + ' of ' + total + ' exported</div>'
+      + '<div style="color:rgba(255,255,255,.55);font-size:12px;margin-bottom:10px">iPhone sends 10 at a time</div>'
+      + '<button id="exportNext" style="width:100%;height:46px;border:0;border-radius:12px;background:#fff;color:#000;font-size:15px;font-weight:700;font-family:inherit;-webkit-appearance:none">Share ' + (next + 1) + '–' + end + '</button>'
+      + '<button id="exportStop" style="width:100%;height:40px;margin-top:8px;border:0;border-radius:12px;background:transparent;color:rgba(255,255,255,.7);font-size:14px;font-family:inherit;-webkit-appearance:none">Stop</button>';
+    panel.style.display = 'block';
+    document.getElementById('exportNext').onclick = () => { panel.style.display = 'none'; shareNext(); };   // straight from the tap
+    document.getElementById('exportStop').onclick = () => finish(`Export stopped — ${exported} of ${total} exported`);
+  };
+  shareNext();
 }
 
 $('exportKeeps').onclick = async () => {
@@ -2523,22 +2543,6 @@ async function openCompareOverlay(){
       '<span>' + (picked?'Kept':'Pick') + '</span></button></div>';
   }).join('');
   $('cmpOverlay').classList.add('open');
-  for(const id of ids){
-    const d = state.designs.find(x => x.id === id);
-    if(!d || !d.blob) continue;
-    try {
-      const url = await composite(d, state.settings, 900);
-      const wrap = grid.querySelector('.cmp-cell[data-id="' + id + '"] .cmp-cell-img');
-      if(!wrap) continue;
-      const img = new Image();
-      img.onload = () => {
-        const sk = wrap.querySelector('.skel');
-        if(sk) sk.remove();
-        wrap.appendChild(img);
-      };
-      img.src = url;
-    } catch(e){ console.error('cmp composite', e); }
-  }
   grid.querySelectorAll('.cmp-pick').forEach(btn => {
     btn.addEventListener('click', async e => {
       e.stopPropagation();
@@ -2564,9 +2568,30 @@ async function openCompareOverlay(){
       }
     });
   });
+  const cmpTok = ++_cmpTok;
+  (async () => { for(const id of ids){
+    if(cmpTok !== _cmpTok) return;
+    const d = state.designs.find(x => x.id === id);
+    if(!d || !d.blob) continue;
+    try {
+      const url = await composite(d, state.settings, 900);
+      if(cmpTok !== _cmpTok) return;
+      const wrap = grid.querySelector('.cmp-cell[data-id="' + id + '"] .cmp-cell-img');
+      if(!wrap) continue;
+      const img = new Image();
+      img.onload = () => {
+        const sk = wrap.querySelector('.skel');
+        if(sk) sk.remove();
+        wrap.appendChild(img);
+      };
+      img.src = url;
+    } catch(e){ console.error('cmp composite', e); }
+  } })();
 }
 
+let _cmpTok = 0;
 function closeCompareOverlay(){
+  _cmpTok++;
   $('cmpOverlay').classList.remove('open');
   if(cmpZoomCell){ cmpZoomCell.classList.remove('zoom'); cmpZoomCell = null; }
   state.compareSel = [];
@@ -2637,7 +2662,13 @@ function startFaceoff(explicitIds){
   // tapping through a whole bracket.
   foNext();
 }
-function closeFaceoff(){ const o = document.getElementById('foOverlay'); if(o) o.classList.remove('open'); faceoff = null; if(typeof aiPause === 'function' && aiRun) aiPause(); }
+function closeFaceoff(){
+  const o = document.getElementById('foOverlay'); if(o) o.classList.remove('open');
+  const hadChampion = !!(faceoff && faceoff.championId);
+  faceoff = null;
+  if(typeof aiPause === 'function' && aiRun) aiPause();
+  if(hadChampion){ renderFilters(); renderGrid(); }    // the champion's new star/Keep shows straight away
+}
 function foRemaining(){ const f = faceoff; return f.pool.length + f.pending.length + 2; }
 function foNext(){
   const f = faceoff; if(!f) return;
@@ -2698,7 +2729,10 @@ async function foChampion(id){
   const losers = f.losers.slice();
   const d = state.designs.find(x => x.id === id);
   // Commit the decision: champion becomes a finalist and Kept.
-  if(d){ d.finalist = true; if(d.status !== 'round1') d.status = 'round1'; await persistDesign(d); }
+  if(d){ d.finalist = true; if(d.status !== 'round1') d.status = 'round1'; persistSoon(d); }
+  f.championId = id;
+  // v14.64: undo here used to let you crown a second champion with both kept
+  const undoBtn = document.getElementById('foUndo'); if(undoBtn) undoBtn.disabled = true;
   const t = document.getElementById('foTitle'), s = document.getElementById('foSub');
   if(t) t.textContent = 'Champion';
   if(s) s.textContent = 'Beat ' + losers.length + ' other' + (losers.length === 1 ? '' : 's');
@@ -2780,9 +2814,24 @@ function selStopAuto(){ if(selAutoTimer){ clearInterval(selAutoTimer); selAutoTi
 // where the finger is, in reading order - full rows in between - and dragging back
 // shrinks it. Anything selected before this drag stays selected.
 let dragCards = null, dragStartIdx = -1, dragPre = null, dragLastX = 0, dragLastY = 0;
+// The visible part of the grid: below the sticky header, above the select bar.
+function selGridBand(){
+  const h = document.querySelector('header'), bar = document.getElementById('selBar');
+  const top = h ? Math.max(0, h.getBoundingClientRect().bottom) : 0;
+  const bottom = (bar && getComputedStyle(bar).display !== 'none') ? bar.getBoundingClientRect().top : window.innerHeight;
+  return {top, bottom};
+}
 function selCardAt(x, y){
-  const el = document.elementFromPoint(x, y);
-  return (el && el.closest) ? el.closest('.card') : null;
+  let el = document.elementFromPoint(x, y);
+  let c = (el && el.closest) ? el.closest('.card') : null;
+  if(!c){
+    // v14.64: finger is over the header or the select bar (where auto-scroll happens) -
+    // use the nearest card row just inside the grid instead of giving up.
+    const band = selGridBand();
+    const yy = Math.min(band.bottom - 6, Math.max(band.top + 6, y));
+    if(yy !== y){ el = document.elementFromPoint(x, yy); c = (el && el.closest) ? el.closest('.card') : null; }
+  }
+  return c;
 }
 function selDragBegin(card){
   dragCards = Array.from(document.querySelectorAll('.card'));
@@ -2808,9 +2857,9 @@ function selDragEnd(){ dragCards = null; dragStartIdx = -1; dragPre = null; selS
 // Hold near the top/bottom edge to keep scrolling; the range keeps extending to
 // whatever card slides under the finger.
 function selEdgeScroll(y){
-  const EDGE = 90, H = window.innerHeight;
+  const EDGE = 50, band = selGridBand();
   let dir = 0;
-  if(y < EDGE) dir = -1; else if(y > H - EDGE) dir = 1;
+  if(y < band.top + EDGE) dir = -1; else if(y > band.bottom - EDGE) dir = 1;
   if(!dir){ selStopAuto(); return; }
   if(selAutoTimer) return;
   selAutoTimer = setInterval(() => { window.scrollBy(0, dir * 14); selDragTo(dragLastX, dragLastY); }, 16);
