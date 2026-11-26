@@ -1275,7 +1275,7 @@ function render(){
 function renderContext(){
   const shirt = state.settings.shirtMode === 'auto' ? 'Auto' : (state.settings.shirtMode === 'black' ? 'Black' : 'White');
   const sz = state.settings.size === 'auto' ? '' : ' \u00b7 ' + (ZONES[state.settings.size]?.label || state.settings.size);
-  $('ctxText').textContent = `v14.65 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
+  $('ctxText').textContent = `v14.66 \u00b7 ${shirt}${sz} \u00b7 ${state.designs.length} ${state.designs.length===1?'design':'designs'}`;
 }
 
 function renderFilters(){
@@ -4182,21 +4182,32 @@ async function _shareViewerItem(kind){
     } catch(e){}
   }
   const file = new File([blob], filename, {type: mime});
-  showSavePreview(URL.createObjectURL(blob), file);
+  showSavePreview(URL.createObjectURL(blob), file, kind);
 }
 
-function showSavePreview(url, file){
+function showSavePreview(url, file, kind){
   const old = document.getElementById('imgFallback'); if(old) old.remove();
   const m = document.createElement('div');
   m.id = 'imgFallback';
   m.style.cssText = 'position:fixed;inset:0;z-index:90;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px 16px calc(20px + env(safe-area-inset-bottom))';
   const canShare = !!(navigator.share && navigator.canShare && (() => { try { return navigator.canShare({files:[file]}); } catch(e){ return false; } })());
-  m.innerHTML = '<img src="' + url + '" alt="" style="max-width:100%;max-height:62vh;object-fit:contain;border-radius:8px;-webkit-touch-callout:default;-webkit-user-select:auto;user-select:auto">'
+  const kb = file.size / 1024;
+  const sizeTxt = kb >= 1024 ? (kb / 1024).toFixed(1) + ' MB' : Math.round(kb) + ' KB';
+  m.innerHTML = '<div id="saveInfo" style="color:#fff;font-size:13px;font-weight:700;margin-bottom:10px;text-align:center">'
+    + (kind === 'tee' ? 'Mockup preview' : 'Original file') + ' \u00b7 ' + sizeTxt + '</div>'
+    + '<img id="saveImg" src="' + url + '" alt="" style="max-width:100%;max-height:58vh;object-fit:contain;border-radius:8px;-webkit-touch-callout:default;-webkit-user-select:auto;user-select:auto">'
     + '<div style="color:rgba(255,255,255,.55);font-size:12px;margin:12px 0 14px;text-align:center">'
     + (canShare ? 'Or long-press the picture → Save to Photos' : 'Long-press the picture → Save to Photos') + '</div>'
     + (canShare ? '<button id="saveNow" style="width:100%;max-width:340px;height:50px;border-radius:14px;border:0;background:#fff;color:#000;font-size:16px;font-weight:700;font-family:inherit;-webkit-appearance:none">Save to Photos</button>' : '')
     + '<button id="saveDone" style="width:100%;max-width:340px;height:46px;margin-top:10px;border-radius:14px;border:0;background:#2c2c31;color:#fff;font-size:15px;font-weight:600;font-family:inherit;-webkit-appearance:none">Done</button>';
   document.body.appendChild(m);
+  // Show the real pixel size too - that, not the KB, is what matters for printing.
+  const im = document.getElementById('saveImg'), info = document.getElementById('saveInfo');
+  if(im && info) im.onload = () => {
+    const w = im.naturalWidth, h = im.naturalHeight;
+    info.textContent = (kind === 'tee' ? 'Mockup preview' : 'Original file') + ' \u00b7 ' + w + '\u00d7' + h + ' px \u00b7 ' + sizeTxt
+      + (kind !== 'tee' && Math.max(w, h) < 3000 ? ' \u00b7 upscale before printing' : '');
+  };
   const done = () => { m.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000); };
   document.getElementById('saveDone').onclick = done;
   const sv = document.getElementById('saveNow');
